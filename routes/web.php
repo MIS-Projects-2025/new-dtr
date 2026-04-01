@@ -11,6 +11,8 @@ require __DIR__ . '/auth.php';
 
 // General routes
 require __DIR__ . '/general.php';
+require __DIR__ . '/fingerprint.php';
+require __DIR__ . '/scan.php';
 
 Route::get("/demo", [DemoController::class, 'index'])->name('demo');
 
