@@ -25,7 +25,8 @@ class EmployeeService
                 'JOB_TITLE',
                 'DEPARTMENT',
             ])
-            ->map(fn($employee) => $this->mapEmployeeData($employee));
+            ->map(fn(EmployeeMasterlist $employee) => $this->mapEmployeeData($employee));
+
     }
 
     /**
@@ -46,7 +47,7 @@ class EmployeeService
             $query->whereDate('log_date', '<=', $dateTo);
         }
 
-        return $query->get()->map(fn($log) => $this->mapLogData($log));
+        return $query->get()->map(fn(VPLog $log) => $this->mapLogData($log));
     }
 
     /**
@@ -67,7 +68,7 @@ class EmployeeService
             ->whereDate('log_date', $date)
             ->orderBy('log_time', 'asc')
             ->get()
-            ->map(fn($log) => $this->mapLogData($log));
+            ->map(fn(VPLog $log) => $this->mapLogData($log));
     }
 
     /**
@@ -95,7 +96,7 @@ class EmployeeService
             'employee_name'  => $log->employee_name,
             'department'     => $log->department,
             'job_title'      => $log->job_title,
-            'log_date'       => $log->log_date->format('Y-m-d'),
+            'log_date' => Carbon::parse($log->log_date)->format('Y-m-d'),
             'log_time'       => Carbon::parse($log->log_time)->format('H:i:s'),
             'log_type'       => $log->log_type,
             'formatted_time' => Carbon::parse($log->log_time)->format('h:i A'),

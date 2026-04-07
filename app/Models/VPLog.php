@@ -95,7 +95,7 @@ class VPLog extends Model
      */
     public function getFormattedLogDateAttribute(): string
     {
-        return $this->log_date->format('M d, Y');
+        return Carbon::parse($this->log_date)->format('M d, Y');
     }
 
     /**
