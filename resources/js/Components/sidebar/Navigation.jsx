@@ -18,6 +18,12 @@ export default function NavLinks({ isSidebarOpen }) {
                 isSidebarOpen={isSidebarOpen}
             />
             <SidebarLink
+                href={route("daily-time-record.index")}
+                icon={<ScanLine size={20} />}
+                label="Daily Time Record"
+                isSidebarOpen={isSidebarOpen}
+            />
+            <SidebarLink
                 href={route("scan-logs.index")}
                 icon={<ScanLine size={20} />}
                 label="Scan Log"
