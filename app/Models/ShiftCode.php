@@ -9,7 +9,7 @@ class ShiftCode extends Model
 {
     use HasFactory;
 
-    protected $connection = 'scheduler'; // same custom connection
+    protected $connection = 'calendar'; // same custom connection
     protected $table = 'shift_codes';
     protected $primaryKey = 'SHIFT_CODE_ID';
 

@@ -125,6 +125,73 @@ export async function captureFingerprint() {
     };
 }
 
+/**
+ * 1:N match — compare a captured template against a list of stored templates.
+ * Calls the SecuGen HTTP service's /SGIFPMatch endpoint for each stored template.
+ *
+ * @param {string} capturedTemplate   Base64 template from captureFingerprint()
+ * @param {Array}  storedTemplates    Array of { employid, finger_index, template } from server
+ * @returns {string|null}             Matched employid, or null if no match
+ */
+export async function matchFingerprint(capturedTemplate, storedTemplates) {
+    const port = await discoverPort();
+    if (port === null) {
+        throw new Error(
+            "SecuGen service not found. Make sure it is running on this PC.",
+        );
+    }
+
+    for (const stored of storedTemplates) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 8000);
+
+        try {
+            const body = new URLSearchParams({
+                Template1:      capturedTemplate,
+                Template2:      stored.template,
+                TemplateFormat: "ISO",
+            });
+
+            const response = await fetch(
+                `http://127.0.0.1:${port}/SGIFPMatch`,
+                {
+                    method:  "POST",
+                    mode:    "cors",
+                    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                    body:    body.toString(),
+                    signal:  controller.signal,
+                },
+            );
+
+            if (!response.ok) {
+                console.warn(`[matchFingerprint] HTTP ${response.status} for employid ${stored.employid}`);
+                continue;
+            }
+
+            const data = await response.json();
+            console.log(`[matchFingerprint] employid=${stored.employid} finger=${stored.finger_index}`, data);
+
+            if (data.ErrorCode === 0 && data.Matched === true) {
+                return String(stored.employid);
+            }
+
+        } catch (err) {
+            clearTimeout(timer);
+            if (err.name === "AbortError") {
+                console.warn(`[matchFingerprint] Timed out on employid=${stored.employid}`);
+                // Don't throw — skip this template and try the next one
+                continue;
+            }
+            console.warn(`[matchFingerprint] Error on employid=${stored.employid}:`, err.message);
+            continue;
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
+    return null;
+} 
+
 /** Force port rediscovery (call if the service was restarted). */
 export function resetPortCache() {
     _cachedPort = null;

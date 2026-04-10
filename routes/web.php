@@ -3,6 +3,7 @@
 use App\Http\Controllers\DemoController;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
+use App\Http\Controllers\ScanLogController;
 
 $app_name = env('APP_NAME', '');
 

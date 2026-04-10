@@ -423,8 +423,8 @@ export default function RegisterFingerprint({ tableData }) {
         <AuthenticatedLayout user={auth.user}>
             <Head title="Register Fingerprint" />
 
-            <div className="p-4 min-h-screen">
-                <div className="border border-base-300 rounded-lg bg-base-100 shadow-sm">
+            <div className="p-4 h-full flex flex-col">
+    <div className="border border-base-300 rounded-lg bg-base-100 shadow-sm flex flex-col flex-1 overflow-hidden">
                     {/* ── Header ─────────────────────────────────────────────── */}
                     <div className="px-6 py-5 border-b border-base-300">
                         <div className="flex items-center justify-between">
@@ -467,7 +467,7 @@ export default function RegisterFingerprint({ tableData }) {
                     </div>
 
                     {/* ── Employee Cards Grid ─────────────────────────────────── */}
-                    <div className="p-6">
+                    <div className="p-6 overflow-y-auto flex-1">
                         {filteredEmployees.length === 0 ? (
                             <div className="flex flex-col items-center justify-center py-20 text-base-content opacity-30 gap-3">
                                 <FingerprintIcon

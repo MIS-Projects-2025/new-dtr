@@ -62,7 +62,7 @@ return [
             ]) : [],
         ],
 
-        'scheduler' => [
+        'calendar' => [
             'driver' => 'mysql',
             'url' => env('ADB_URL'),
             'host' => env('SDB_HOST', '127.0.0.1'),

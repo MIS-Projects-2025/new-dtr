@@ -9,7 +9,7 @@ class WorkScheduler extends Model
 {
     use HasFactory;
 
-    protected $connection = 'scheduler'; // custom database connection
+    protected $connection = 'calendar'; // custom database connection
     protected $table = 'work_scheduler';
     protected $primaryKey = 'ID';
 
