@@ -1,9 +1,13 @@
 import { usePage } from "@inertiajs/react";
 import SidebarLink from "@/Components/sidebar/SidebarLink";
-import { LayoutDashboard, ScanLine, Fingerprint } from "lucide-react";
-import { CalendarOutlined } from "@ant-design/icons";
-
-import Dropdown from "./DropDown";
+import { 
+  LayoutDashboard, 
+  CalendarDays, 
+  Users, 
+  ScanLine, 
+  Fingerprint,
+  Clock 
+} from "lucide-react";
 
 export default function NavLinks({ isSidebarOpen }) {
     const { emp_data } = usePage().props;
@@ -21,19 +25,19 @@ export default function NavLinks({ isSidebarOpen }) {
             />
             <SidebarLink
                 href={route("daily-time-record.index")}
-                icon={<CalendarOutlined size={20} />}
+                icon={<CalendarDays size={20} />}
                 label="Daily Time Record"
                 isSidebarOpen={isSidebarOpen}
             />
             <SidebarLink
                 href={route("biometric-status.index")}
-                icon={<ScanLine size={20} />}
+                icon={<Users size={20} />}
                 label="Employee Biometric Management"
                 isSidebarOpen={isSidebarOpen}
             />
             <SidebarLink
                 href={route("scan-logs.index")}
-                icon={<ScanLine size={20} />}
+                icon={<Clock size={20} />}
                 label="Scan Log"
                 isSidebarOpen={isSidebarOpen}
             />
