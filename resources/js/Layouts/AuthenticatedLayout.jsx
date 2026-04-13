@@ -29,3 +29,4 @@ export default function AuthenticatedLayout({ children }) {
         </div>
     );
 }
+
