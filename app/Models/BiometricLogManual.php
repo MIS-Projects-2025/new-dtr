@@ -13,7 +13,7 @@ class BiometricLogManual extends Model
     public $timestamps = false;
 
     protected $fillable = [
-        'employid',
+        'employid', //use this to connect to other models instead of id since employid is the unique identifier for employees
         'datetime',
         'device_ip',
         'device_number',
@@ -30,4 +30,9 @@ class BiometricLogManual extends Model
         'work_code' => 'integer',
         'state' => 'integer',
     ];
+    public function employee()
+    {
+        return $this->belongsTo(EmployeeMasterlist::class, 'employid', 'EMPLOYID');
+        //                                                   ^ their FK   ^ master PK (EMPLOYID)
+    }
 }

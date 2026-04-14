@@ -13,7 +13,7 @@ class FingerprintTemplate extends Model
     public $timestamps = true;
 
     protected $fillable = [
-        'employid',
+        'employid', //use this to connect to other models instead of id since employid is the unique identifier for employees
         'template_data',
         'device_type',
         'finger_index',

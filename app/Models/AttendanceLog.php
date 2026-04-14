@@ -13,7 +13,7 @@ class AttendanceLog extends Model
     public $timestamps = true;
 
     protected $fillable = [
-        'employid',
+        'employid', //use this to connect to other models instead of id since employid is the unique identifier for employees
         'employee_name',
         'department',
         'log_type', // <= this can be check_in, check_out, break_in1, break_out1, break_in2, break_out2, lunch_in, lunch_out

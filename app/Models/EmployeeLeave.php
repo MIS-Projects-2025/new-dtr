@@ -53,7 +53,7 @@ class EmployeeLeave extends Model
      * Mass assignable fields
      */
     protected $fillable = [
-        'EMPLOYID',
+        'EMPLOYID', //use this to connect to other models instead of LEAVEID since EMPLOYID is the unique identifier for employees
         'EMPNAME',
         'DATESTART',
         'DATEEND',
@@ -87,4 +87,9 @@ class EmployeeLeave extends Model
         'date_created',
         'date_updated',
     ];
+    public function employee()
+    {
+        return $this->belongsTo(EmployeeMasterlist::class, 'EMPLOYID', 'EMPLOYID');
+        //                                                   ^ their FK   ^ master PK (EMPLOYID)
+    }
 }

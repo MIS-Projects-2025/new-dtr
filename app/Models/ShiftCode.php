@@ -11,7 +11,7 @@ class ShiftCode extends Model
 
     protected $connection = 'calendar'; // same custom connection
     protected $table = 'shift_codes';
-    protected $primaryKey = 'SHIFT_CODE_ID';
+    protected $primaryKey = 'SHIFT_CODE_ID';  // use this Shift Code ID to connect to WorkScheduler's SCHEDULE field which is a JSON that has the shift code id as value for each day of the month
 
     public $timestamps = false; // we'll map custom timestamp columns
 
@@ -36,4 +36,20 @@ class ShiftCode extends Model
         'CREATED_AT' => 'datetime',
         'UPDATED_AT' => 'datetime',
     ];
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // RELATIONSHIPS
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * WorkSchedulers that reference this ShiftCode in their SCHEDULE JSON.
+     * Uses MySQL JSON_CONTAINS — requires MySQL 5.7+.
+     * Tries both string and integer variants since JSON encoding may vary.
+     */
+    public function workSchedulers()
+    {
+        return WorkScheduler::whereJsonContains('SCHEDULE', (string) $this->SHIFT_CODE_ID)
+            ->orWhereJsonContains('SCHEDULE', $this->SHIFT_CODE_ID)
+            ->get();
+    }
 }

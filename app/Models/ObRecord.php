@@ -27,7 +27,7 @@ class ObRecord extends Model
 
     // Mass assignable fields
     protected $fillable = [
-        'EMPID',
+        'EMPID', //use this to connect to other models instead of ID since EMPID is the unique identifier for employees
         'EMPNAME',
         'DATE_FILE',
         'EMPSTATUS',
@@ -67,4 +67,8 @@ class ObRecord extends Model
         'date_created'     => 'datetime',
         'date_updated'     => 'datetime',
     ];
+    public function employee()
+    {
+        return $this->belongsTo(EmployeeMasterlist::class, 'EMPID', 'EMPLOYID');
+    }
 }

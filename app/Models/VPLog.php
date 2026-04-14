@@ -37,7 +37,7 @@ class VPLog extends Model
      * @var array<string>
      */
     protected $fillable = [
-        'employee_id',
+        'employee_id', //use this to connect to other models instead of id since employee_id is the unique identifier for employees
         'employee_name',
         'department',
         'job_title',
@@ -166,14 +166,8 @@ class VPLog extends Model
         return $query->orderBy('created_at', 'desc');
     }
 
-    /**
-     * Get the employee relationship (if you have an Employee model)
-     * Uncomment if you want to add relationship
-     *
-     * @return \Illuminate\Database\Eloquent\Relations\BelongsTo
-     */
-    // public function employee()
-    // {
-    //     return $this->belongsTo(EmployeeMasterlist::class, 'employee_id', 'EMPLOYID');
-    // }
+    public function employee()
+    {
+        return $this->belongsTo(EmployeeMasterlist::class, 'EMPID', 'EMPLOYID');
+    }
 }

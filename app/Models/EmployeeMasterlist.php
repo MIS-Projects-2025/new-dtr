@@ -40,7 +40,7 @@ class EmployeeMasterlist extends Model
      * Mass assignable fields
      */
     protected $fillable = [
-        'EMPLOYID',
+        'EMPLOYID', //use this to connect to other models instead of EMPID since EMPLOYID is the unique identifier for employees
         'EMPNAME',
         'EMPPOSITION',
         'JOB_TITLE',
@@ -191,4 +191,72 @@ class EmployeeMasterlist extends Model
         'EMERGENCYLEAVE'    => 'float',
         'pa_level'          => 'decimal:2',
     ];
+    
+    // ─────────────────────────────────────────────────────────────────────────
+    // RELATIONSHIPS
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * BiometricLog — foreign key: employid → EMPLOYID
+     */
+    public function biometricLogs()
+    {
+        return $this->hasMany(BiometricLog::class, 'employid', 'EMPLOYID');
+    }
+
+    /**
+     * BiometricLogManual — foreign key: employid → EMPLOYID
+     */
+    public function biometricLogsManual()
+    {
+        return $this->hasMany(BiometricLogManual::class, 'employid', 'EMPLOYID');
+    }
+
+    /**
+     * AttendanceLog — foreign key: employid → EMPLOYID
+     */
+    public function attendanceLogs()
+    {
+        return $this->hasMany(AttendanceLog::class, 'employid', 'EMPLOYID');
+    }
+
+    /**
+     * FingerprintTemplate — foreign key: employid → EMPLOYID
+     */
+    public function fingerprintTemplates()
+    {
+        return $this->hasMany(FingerprintTemplate::class, 'employid', 'EMPLOYID');
+    }
+
+    /**
+     * EmployeeLeave — foreign key: EMPLOYID → EMPLOYID
+     */
+    public function leaves()
+    {
+        return $this->hasMany(EmployeeLeave::class, 'EMPLOYID', 'EMPLOYID');
+    }
+
+    /**
+     * ObRecord — foreign key: EMPID → EMPLOYID
+     */
+    public function obRecords()
+    {
+        return $this->hasMany(ObRecord::class, 'EMPID', 'EMPLOYID');
+    }
+
+    /**
+     * WorkScheduler — foreign key: EMPID → EMPLOYID
+     */
+    public function workSchedules()
+    {
+        return $this->hasMany(WorkScheduler::class, 'EMPID', 'EMPLOYID');
+    }
+
+    /**
+     * VPLog — foreign key: employee_id → EMPLOYID
+     */
+    public function vpLogs()
+    {
+        return $this->hasMany(VPLog::class, 'employee_id', 'EMPLOYID');
+    }
 }
