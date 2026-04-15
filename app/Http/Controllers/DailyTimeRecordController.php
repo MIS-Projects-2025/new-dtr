@@ -2,10 +2,10 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Requests\DtrRequest;
 use App\Services\DailyTimeRecordService;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
 use Inertia\Inertia;
+use Inertia\Response;
 
 class DailyTimeRecordController extends Controller
 {
@@ -13,15 +13,13 @@ class DailyTimeRecordController extends Controller
         private readonly DailyTimeRecordService $dtrService
     ) {}
 
-    public function index(Request $request)
+    public function index(DtrRequest $request): Response
     {
-        $month    = $request->get('month', now()->format('Y-m'));
-        $employId = session('emp_data.emp_id'); 
-
-        $tableData = $this->dtrService->getTableData($employId, $month);
+        $month    = $request->month();
+        $employId = session('emp_data.emp_id');
 
         return Inertia::render('DailyTimeRecord', [
-            'tableData'    => $tableData,
+            'tableData'    => $this->dtrService->getTableData($employId, $month),
             'tableFilters' => ['month' => $month],
         ]);
     }

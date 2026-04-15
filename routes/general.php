@@ -23,6 +23,9 @@ Route::prefix($app_name)->middleware(AuthMiddleware::class)->group(function () {
 
   Route::get("/", [DashboardController::class, 'index'])->name('dashboard');
   Route::get('/dashboard/attendance-count', [DashboardController::class, 'attendanceCount'])->name('dashboard.attendance-count');
+  Route::get('/dashboard/dtr-rows', [DashboardController::class, 'dtrRows'])->name('dashboard.dtr-rows');
+Route::get('/dashboard/all-employees-dtr', [DashboardController::class, 'allEmployeesDtr'])
+    ->name('dashboard.all-employees-dtr');
   Route::get("/profile", [ProfileController::class, 'index'])->name('profile.index');
   Route::post("/change-password", [ProfileController::class, 'changePassword'])->name('changePassword');
 });

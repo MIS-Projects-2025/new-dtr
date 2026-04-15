@@ -3,14 +3,14 @@ import { useContext, useState, useMemo, useEffect, useCallback, useRef } from "r
 import { ThemeContext } from "@/Components/ThemeContext";
 import {
     ConfigProvider, theme as antTheme, Button, Card, Typography,
-    Row, Col, Statistic, Tooltip, Select, Avatar, Tag, Input, Empty, Spin,
+    Row, Col, Statistic, Tooltip, Select, Avatar, Tag, Input, Empty, Spin, DatePicker,
 } from "antd";
 import {
     TableOutlined, DashboardOutlined, LoginOutlined, LogoutOutlined,
     CoffeeOutlined, MenuOutlined, ClockCircleOutlined, ScheduleOutlined,
     CheckCircleOutlined, CloseCircleOutlined, FieldTimeOutlined,
     CalendarOutlined, FilterOutlined, TeamOutlined, UserOutlined,
-    SearchOutlined, ApartmentOutlined, LoadingOutlined,
+    SearchOutlined, ApartmentOutlined, LoadingOutlined, MoonOutlined,
 } from "@ant-design/icons";
 import { router } from "@inertiajs/react";
 import dayjs from "dayjs";
@@ -97,13 +97,138 @@ function generateWeekOptions(count = 8) {
 
 // ── Component ──────────────────────────────────────────────────────────────
 
+// ── Shared color logic (mirrors DailyTimeRecord.jsx) ───────────────────────
+
+const C = {
+    green:   "rgba(25,135,84,0.6)",   red:     "rgba(220,53,69,0.6)",
+    yellow:  "rgba(255,193,7,0.6)",   blue:    "rgba(13,110,253,0.6)",
+    purple:  "rgba(111,66,193,0.6)",  grey:    "rgba(108,117,125,0.6)",
+    cyan:    "rgba(13,202,240,0.6)",  neutral: "rgba(200,200,200,0.15)",
+};
+
+const REMARK_C = {
+    green:  "rgba(25,135,84,0.7)",   red:    "rgba(220,53,69,0.7)",
+    yellow: "rgba(255,193,7,0.7)",   blue:   "rgba(13,110,253,0.7)",
+    purple: "rgba(111,66,193,0.7)",  grey:   "rgba(108,117,125,0.7)",
+    cyan:   "rgba(13,202,240,0.7)",
+};
+
+function getCellColors(row) {
+    const sl = (row.remarks ?? "").toLowerCase();
+    const isUnscheduled = row.shift_type === "Unscheduled";
+    const filled  = (v) => (v ? C.green : C.red);
+    const neutral = (v) => (v ? C.green : C.neutral);
+    const colBreak = isUnscheduled ? neutral : filled;
+
+    let ci = filled(row.time_in),       bo1 = colBreak(row.break_out_1);
+    let bi1 = colBreak(row.break_in_1), lo  = colBreak(row.lunch_out);
+    let li  = colBreak(row.lunch_in),   bo2 = colBreak(row.break_out_2);
+    let bi2 = colBreak(row.break_in_2), co  = filled(row.time_out);
+    let rm = "";
+
+    const setAll = (c) => { ci = bo1 = bi1 = lo = li = bo2 = bi2 = co = c; };
+
+    if (row.holiday_info)              { setAll(C.grey);   rm = REMARK_C.grey;   }
+    else if (row.leave_info)           { setAll(C.blue);   rm = REMARK_C.blue;   }
+    else if (row.is_full_ob)           { setAll(C.purple); rm = REMARK_C.purple; }
+    else if (row.remarks === "Rest Day")  { setAll(C.grey);  rm = REMARK_C.grey;  }
+    else if (row.remarks === "Absent")    { setAll(C.red);   rm = REMARK_C.red;   }
+    else if (row.remarks === "Current Date") {
+        if (!row.time_in)     ci  = C.cyan;
+        if (!row.break_out_1) bo1 = C.cyan;
+        if (!row.break_in_1)  bi1 = C.cyan;
+        if (!row.lunch_out)   lo  = C.cyan;
+        if (!row.lunch_in)    li  = C.cyan;
+        if (!row.break_out_2) bo2 = C.cyan;
+        if (!row.break_in_2)  bi2 = C.cyan;
+        if (!row.time_out)    co  = C.cyan;
+        rm = REMARK_C.cyan;
+    } else {
+        if (sl.includes("late") && !sl.includes("late break")) ci = C.yellow;
+        if (sl.includes("early out"))    co  = C.yellow;
+        if (sl.includes("over break 1")) bi1 = C.yellow;
+        if (sl.includes("over lunch"))   li  = C.yellow;
+        if (sl.includes("over break 2")) bi2 = C.yellow;
+        rm = /late|early out|no check|over break|over lunch/.test(sl)
+            ? REMARK_C.yellow : REMARK_C.green;
+    }
+    return { ci, bo1, bi1, lo, li, bo2, bi2, co, rm };
+}
+
+// ── Per-date in-memory cache ────────────────────────────────────────────────
+const dtrByDateCache = {};
+const DTR_CACHE_TTL_MS = 5 * 60 * 1000;
+
 function EmployeeDashboardInner({ empPosition = null }) {
     const { token } = antTheme.useToken();
+
+    const [selectedDate, setSelectedDate] = useState(dayjs());
+    const [dtrRows, setDtrRows]           = useState([]);
+    const [dtrLoading, setDtrLoading]     = useState(true);
+    const [dtrError, setDtrError]         = useState(null);
+    const abortDtrRef                     = useRef(null);
+
+    useEffect(() => {
+        const dateStr = selectedDate.format("YYYY-MM-DD");
+
+        if (!dtrByDateCache[dateStr]) {
+            dtrByDateCache[dateStr] = { data: null, fetchedAt: null, promise: null };
+        }
+        const cache = dtrByDateCache[dateStr];
+
+        const now = Date.now();
+        const cacheValid = cache.data !== null
+            && cache.fetchedAt !== null
+            && (now - cache.fetchedAt) < DTR_CACHE_TTL_MS;
+
+        if (cacheValid) {
+            setDtrRows(cache.data);
+            setDtrLoading(false);
+            return;
+        }
+
+        if (!cache.promise) {
+            abortDtrRef.current = new AbortController();
+            cache.promise = fetch(
+                route("dashboard.all-employees-dtr", { date: dateStr }),
+                { headers: { Accept: "application/json" }, signal: abortDtrRef.current.signal }
+            )
+                .then((res) => { if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.json(); })
+                .then((data) => {
+                    cache.data      = data;
+                    cache.fetchedAt = Date.now();
+                    cache.promise   = null;
+                    return data;
+                })
+                .catch((err) => { cache.promise = null; throw err; });
+        }
+
+        setDtrLoading(true);
+        setDtrError(null);
+
+        cache.promise
+            .then((data) => setDtrRows(data))
+            .catch((err) => { if (err.name !== "AbortError") setDtrError("Failed to load records."); })
+            .finally(() => setDtrLoading(false));
+
+        return () => abortDtrRef.current?.abort();
+    }, [selectedDate]);
+
+    const timeColumns = [
+        { label: "In",      key: "time_in",     color: (c) => c.ci  },
+        { label: "B1 Out",  key: "break_out_1", color: (c) => c.bo1 },
+        { label: "B1 In",   key: "break_in_1",  color: (c) => c.bi1 },
+        { label: "Lunch O", key: "lunch_out",   color: (c) => c.lo  },
+        { label: "Lunch I", key: "lunch_in",    color: (c) => c.li  },
+        { label: "B2 Out",  key: "break_out_2", color: (c) => c.bo2 },
+        { label: "B2 In",   key: "break_in_2",  color: (c) => c.bi2 },
+        { label: "Out",     key: "time_out",    color: (c) => c.co  },
+    ];
 
     return (
         <div style={{ display: "flex", flexDirection: "column", gap: 12, height: "100%", minHeight: 0, overflow: "hidden" }}>
 
-            {/* Row 1 — 30% of remaining height, full width */}
+            {/* Row 1 — Overview */}
             <div style={{ flex: "3 0 0", minHeight: 0, overflow: "hidden" }}>
                 <Card
                     size="small"
@@ -132,51 +257,36 @@ function EmployeeDashboardInner({ empPosition = null }) {
                                 style={{ height: "100%", background: token.colorBgElevated, border: `1px solid ${token.colorBorder}`, borderTop: `2px solid ${token.colorSuccess}` }}
                                 styles={{ body: { height: "calc(100% - 40px)", padding: "8px 12px", display: "flex", flexDirection: "column", gap: 4, overflow: "hidden" } }}
                             >
-                                {/* Row 1 — 2 columns (header labels) */}
-                                    <div style={{ display: "grid", gridTemplateColumns: "minmax(110px, 1.8fr) repeat(5, 1fr)", gap: 4, flexShrink: 0 }}>
-                                        <div style={{ gridColumn: "span 2", padding: "4px 6px", borderRadius: token.borderRadiusSM, background: `${token.colorSuccess}15`, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                                            <Text style={{ fontSize: 10, fontWeight: 600, color: token.colorSuccess, textTransform: "uppercase", letterSpacing: 0.5 }}>Head Count</Text>
-                                        </div>
-                                        <div style={{ gridColumn: "span 4", padding: "4px 6px", borderRadius: token.borderRadiusSM, background: `${token.colorSuccess}15`, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                                            <Text style={{ fontSize: 10, fontWeight: 600, color: token.colorSuccess, textTransform: "uppercase", letterSpacing: 0.5 }}>Rest Day</Text>
-                                        </div>
+                                <div style={{ display: "grid", gridTemplateColumns: "minmax(110px, 1.8fr) repeat(5, 1fr)", gap: 4, flexShrink: 0 }}>
+                                    <div style={{ gridColumn: "span 2", padding: "4px 6px", borderRadius: token.borderRadiusSM, background: `${token.colorSuccess}15`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                        <Text style={{ fontSize: 10, fontWeight: 600, color: token.colorSuccess, textTransform: "uppercase", letterSpacing: 0.5 }}>Head Count</Text>
                                     </div>
-                                    {/* Rows 2–5 — label column + 5 data cells */}
-                                    {[
-                                        { row: 1, label: null },
-                                        { row: 2, label: "Scheduled Shift" },
-                                        { row: 3, label: "Unscheduled Shift" },
-                                        { row: 4, label: "TOTAL" },
-                                    ].map(({ row, label }) => {
-                                        const isTotal = label === "TOTAL";
-                                        const isHeader = row === 1;
-                                        const colHeaders = ["Expected", "Present", "%", "Absent", "%"];
-                                        return (
-                                            <div key={row} style={{ display: "grid", gridTemplateColumns: "minmax(110px, 1.8fr) repeat(5, 1fr)", gap: 4, flex: 1, minHeight: 0 }}>
-                                                <div style={{
-                                                    borderRadius: token.borderRadiusSM,
-                                                    background: isHeader ? `${token.colorPrimary}08` : isTotal ? `${token.colorPrimary}18` : `${token.colorPrimary}08`,
-                                                    border: `1px solid ${isTotal ? token.colorPrimary + "50" : token.colorBorder}`,
-                                                    display: "flex", alignItems: "center", paddingLeft: 8, overflow: "hidden",
-                                                }}>
-                                                    {label && (
-                                                        <Text style={{ fontSize: 10, fontWeight: isTotal ? 700 : 500, color: isTotal ? token.colorPrimary : token.colorText, whiteSpace: "nowrap" }}>
-                                                            {label}
-                                                        </Text>
-                                                    )}
-                                                </div>
-                                                {colHeaders.map((colLabel, idx) => (
-                                                    <div key={idx} style={{ borderRadius: token.borderRadiusSM, background: isHeader ? `${token.colorPrimary}15` : token.colorBgContainer, border: `1px solid ${token.colorBorder}`, display: "flex", alignItems: "center", justifyContent: "center", minHeight: 0 }}>
-                                                        {isHeader && (
-                                                            <Text style={{ fontSize: 10, fontWeight: 600, color: token.colorPrimary, textTransform: "uppercase", letterSpacing: 0.5, whiteSpace: "nowrap" }}>
-                                                                {colLabel}
-                                                            </Text>
-                                                        )}
-                                                    </div>
-                                                ))}
+                                    <div style={{ gridColumn: "span 4", padding: "4px 6px", borderRadius: token.borderRadiusSM, background: `${token.colorSuccess}15`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                        <Text style={{ fontSize: 10, fontWeight: 600, color: token.colorSuccess, textTransform: "uppercase", letterSpacing: 0.5 }}>Rest Day</Text>
+                                    </div>
+                                </div>
+                                {[
+                                    { row: 1, label: null },
+                                    { row: 2, label: "Scheduled Shift" },
+                                    { row: 3, label: "Unscheduled Shift" },
+                                    { row: 4, label: "TOTAL" },
+                                ].map(({ row, label }) => {
+                                    const isTotal = label === "TOTAL";
+                                    const isHeader = row === 1;
+                                    const colHeaders = ["Expected", "Present", "%", "Absent", "%"];
+                                    return (
+                                        <div key={row} style={{ display: "grid", gridTemplateColumns: "minmax(110px, 1.8fr) repeat(5, 1fr)", gap: 4, flex: 1, minHeight: 0 }}>
+                                            <div style={{ borderRadius: token.borderRadiusSM, background: isHeader ? `${token.colorPrimary}08` : isTotal ? `${token.colorPrimary}18` : `${token.colorPrimary}08`, border: `1px solid ${isTotal ? token.colorPrimary + "50" : token.colorBorder}`, display: "flex", alignItems: "center", paddingLeft: 8, overflow: "hidden" }}>
+                                                {label && <Text style={{ fontSize: 10, fontWeight: isTotal ? 700 : 500, color: isTotal ? token.colorPrimary : token.colorText, whiteSpace: "nowrap" }}>{label}</Text>}
                                             </div>
-                                        );
-                                    })}
+                                            {colHeaders.map((colLabel, idx) => (
+                                                <div key={idx} style={{ borderRadius: token.borderRadiusSM, background: isHeader ? `${token.colorPrimary}15` : token.colorBgContainer, border: `1px solid ${token.colorBorder}`, display: "flex", alignItems: "center", justifyContent: "center", minHeight: 0 }}>
+                                                    {isHeader && <Text style={{ fontSize: 10, fontWeight: 600, color: token.colorPrimary, textTransform: "uppercase", letterSpacing: 0.5, whiteSpace: "nowrap" }}>{colLabel}</Text>}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    );
+                                })}
                             </Card>
                         </Col>
                         <Col span={8} style={{ height: "100%" }}>
@@ -191,51 +301,36 @@ function EmployeeDashboardInner({ empPosition = null }) {
                                 style={{ height: "100%", background: token.colorBgElevated, border: `1px solid ${token.colorBorder}`, borderTop: `2px solid ${token.colorPrimary}` }}
                                 styles={{ body: { height: "calc(100% - 40px)", padding: "8px 12px", display: "flex", flexDirection: "column", gap: 4, overflow: "hidden" } }}
                             >
-                                {/* Row 1 — 2 columns (header labels) */}
-                                    <div style={{ display: "grid", gridTemplateColumns: "minmax(110px, 1.8fr) repeat(5, 1fr)", gap: 4, flexShrink: 0 }}>
-                                        <div style={{ gridColumn: "span 2", padding: "4px 6px", borderRadius: token.borderRadiusSM, background: `${token.colorPrimary}15`, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                                            <Text style={{ fontSize: 10, fontWeight: 600, color: token.colorPrimary, textTransform: "uppercase", letterSpacing: 0.5 }}>Head Count</Text>
-                                        </div>
-                                        <div style={{ gridColumn: "span 4", padding: "4px 6px", borderRadius: token.borderRadiusSM, background: `${token.colorPrimary}15`, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                                            <Text style={{ fontSize: 10, fontWeight: 600, color: token.colorPrimary, textTransform: "uppercase", letterSpacing: 0.5 }}>Rest Day</Text>
-                                        </div>
+                                <div style={{ display: "grid", gridTemplateColumns: "minmax(110px, 1.8fr) repeat(5, 1fr)", gap: 4, flexShrink: 0 }}>
+                                    <div style={{ gridColumn: "span 2", padding: "4px 6px", borderRadius: token.borderRadiusSM, background: `${token.colorPrimary}15`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                        <Text style={{ fontSize: 10, fontWeight: 600, color: token.colorPrimary, textTransform: "uppercase", letterSpacing: 0.5 }}>Head Count</Text>
                                     </div>
-                                    {/* Rows 2–5 — label column + 5 data cells */}
-                                    {[
-                                        { row: 1, label: null },
-                                        { row: 2, label: "Scheduled Shift" },
-                                        { row: 3, label: "Unscheduled Shift" },
-                                        { row: 4, label: "TOTAL" },
-                                    ].map(({ row, label }) => {
-                                        const isTotal = label === "TOTAL";
-                                        const isHeader = row === 1;
-                                        const colHeaders = ["Expected", "Present", "%", "Absent", "%"];
-                                        return (
-                                            <div key={row} style={{ display: "grid", gridTemplateColumns: "minmax(110px, 1.8fr) repeat(5, 1fr)", gap: 4, flex: 1, minHeight: 0 }}>
-                                                <div style={{
-                                                    borderRadius: token.borderRadiusSM,
-                                                    background: isHeader ? `${token.colorSuccess}08` : isTotal ? `${token.colorSuccess}18` : `${token.colorSuccess}08`,
-                                                    border: `1px solid ${isTotal ? token.colorSuccess + "50" : token.colorBorder}`,
-                                                    display: "flex", alignItems: "center", paddingLeft: 8, overflow: "hidden",
-                                                }}>
-                                                    {label && (
-                                                        <Text style={{ fontSize: 10, fontWeight: isTotal ? 700 : 500, color: isTotal ? token.colorSuccess : token.colorText, whiteSpace: "nowrap" }}>
-                                                            {label}
-                                                        </Text>
-                                                    )}
-                                                </div>
-                                                {colHeaders.map((colLabel, idx) => (
-                                                    <div key={idx} style={{ borderRadius: token.borderRadiusSM, background: isHeader ? `${token.colorSuccess}15` : token.colorBgContainer, border: `1px solid ${token.colorBorder}`, display: "flex", alignItems: "center", justifyContent: "center", minHeight: 0 }}>
-                                                        {isHeader && (
-                                                            <Text style={{ fontSize: 10, fontWeight: 600, color: token.colorSuccess, textTransform: "uppercase", letterSpacing: 0.5, whiteSpace: "nowrap" }}>
-                                                                {colLabel}
-                                                            </Text>
-                                                        )}
-                                                    </div>
-                                                ))}
+                                    <div style={{ gridColumn: "span 4", padding: "4px 6px", borderRadius: token.borderRadiusSM, background: `${token.colorPrimary}15`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                        <Text style={{ fontSize: 10, fontWeight: 600, color: token.colorPrimary, textTransform: "uppercase", letterSpacing: 0.5 }}>Rest Day</Text>
+                                    </div>
+                                </div>
+                                {[
+                                    { row: 1, label: null },
+                                    { row: 2, label: "Scheduled Shift" },
+                                    { row: 3, label: "Unscheduled Shift" },
+                                    { row: 4, label: "TOTAL" },
+                                ].map(({ row, label }) => {
+                                    const isTotal = label === "TOTAL";
+                                    const isHeader = row === 1;
+                                    const colHeaders = ["Expected", "Present", "%", "Absent", "%"];
+                                    return (
+                                        <div key={row} style={{ display: "grid", gridTemplateColumns: "minmax(110px, 1.8fr) repeat(5, 1fr)", gap: 4, flex: 1, minHeight: 0 }}>
+                                            <div style={{ borderRadius: token.borderRadiusSM, background: isHeader ? `${token.colorSuccess}08` : isTotal ? `${token.colorSuccess}18` : `${token.colorSuccess}08`, border: `1px solid ${isTotal ? token.colorSuccess + "50" : token.colorBorder}`, display: "flex", alignItems: "center", paddingLeft: 8, overflow: "hidden" }}>
+                                                {label && <Text style={{ fontSize: 10, fontWeight: isTotal ? 700 : 500, color: isTotal ? token.colorSuccess : token.colorText, whiteSpace: "nowrap" }}>{label}</Text>}
                                             </div>
-                                        );
-                                    })}
+                                            {colHeaders.map((colLabel, idx) => (
+                                                <div key={idx} style={{ borderRadius: token.borderRadiusSM, background: isHeader ? `${token.colorSuccess}15` : token.colorBgContainer, border: `1px solid ${token.colorBorder}`, display: "flex", alignItems: "center", justifyContent: "center", minHeight: 0 }}>
+                                                    {isHeader && <Text style={{ fontSize: 10, fontWeight: 600, color: token.colorSuccess, textTransform: "uppercase", letterSpacing: 0.5, whiteSpace: "nowrap" }}>{colLabel}</Text>}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    );
+                                })}
                             </Card>
                         </Col>
                         <Col span={8} style={{ height: "100%" }}>
@@ -250,21 +345,11 @@ function EmployeeDashboardInner({ empPosition = null }) {
                                 style={{ height: "100%", background: token.colorBgElevated, border: `1px solid ${token.colorBorder}`, borderTop: `2px solid ${token.colorTextSecondary}` }}
                                 styles={{ body: { height: "calc(100% - 40px)", padding: "8px 12px", display: "flex", flexDirection: "column", gap: 4, overflow: "hidden" } }}
                             >
-                                {/* Row 1 — single column header label */}
                                 <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 4, flexShrink: 0 }}>
-                                    <div style={{
-                                        padding: "4px 6px",
-                                        borderRadius: token.borderRadiusSM,
-                                        background: `${token.colorTextSecondary}15`,
-                                        border: `1px solid ${token.colorBorder}`,
-                                        display: "flex",
-                                        alignItems: "center",
-                                        justifyContent: "center"
-                                    }}>
+                                    <div style={{ padding: "4px 6px", borderRadius: token.borderRadiusSM, background: `${token.colorTextSecondary}15`, border: `1px solid ${token.colorBorder}`, display: "flex", alignItems: "center", justifyContent: "center" }}>
                                         <Text style={{ fontSize: 10, fontWeight: 600, color: token.colorTextSecondary, textTransform: "uppercase", letterSpacing: 0.5 }}>Head Count</Text>
                                     </div>
                                 </div>
-                                {/* Rows 2–5 — 5 columns each */}
                                 {[
                                     { row: 1, label: null },
                                     { row: 2, label: "Day Shift" },
@@ -277,27 +362,9 @@ function EmployeeDashboardInner({ empPosition = null }) {
                                     return (
                                         <div key={row} style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 4, flex: 1, minHeight: 0 }}>
                                             {[1, 2, 3, 4, 5].map((col) => (
-                                                <div key={col} style={{
-                                                    borderRadius: token.borderRadiusSM,
-                                                    background: col === 1 && label
-                                                        ? isTotal ? token.colorFillSecondary : token.colorFillQuaternary
-                                                        : isHeader ? token.colorFillTertiary : token.colorBgContainer,
-                                                    border: `1px solid ${col === 1 && isTotal ? token.colorBorderSecondary : token.colorBorder}`,
-                                                    display: "flex", alignItems: "center",
-                                                    justifyContent: col === 1 && label ? "flex-start" : "center",
-                                                    paddingLeft: col === 1 && label ? 8 : 0,
-                                                    minHeight: 0, overflow: "hidden",
-                                                }}>
-                                                    {col === 1 && label && (
-                                                        <Text style={{ fontSize: 10, fontWeight: isTotal ? 700 : 500, color: isTotal ? token.colorTextSecondary : token.colorText, whiteSpace: "nowrap" }}>
-                                                            {label}
-                                                        </Text>
-                                                    )}
-                                                    {isHeader && colHeaders[col - 1] && (
-                                                        <Text style={{ fontSize: 10, fontWeight: 600, color: token.colorTextSecondary, textTransform: "uppercase", letterSpacing: 0.5, whiteSpace: "nowrap" }}>
-                                                            {colHeaders[col - 1]}
-                                                        </Text>
-                                                    )}
+                                                <div key={col} style={{ borderRadius: token.borderRadiusSM, background: col === 1 && label ? isTotal ? token.colorFillSecondary : token.colorFillQuaternary : isHeader ? token.colorFillTertiary : token.colorBgContainer, border: `1px solid ${col === 1 && isTotal ? token.colorBorderSecondary : token.colorBorder}`, display: "flex", alignItems: "center", justifyContent: col === 1 && label ? "flex-start" : "center", paddingLeft: col === 1 && label ? 8 : 0, minHeight: 0, overflow: "hidden" }}>
+                                                    {col === 1 && label && <Text style={{ fontSize: 10, fontWeight: isTotal ? 700 : 500, color: isTotal ? token.colorTextSecondary : token.colorText, whiteSpace: "nowrap" }}>{label}</Text>}
+                                                    {isHeader && colHeaders[col - 1] && <Text style={{ fontSize: 10, fontWeight: 600, color: token.colorTextSecondary, textTransform: "uppercase", letterSpacing: 0.5, whiteSpace: "nowrap" }}>{colHeaders[col - 1]}</Text>}
                                                 </div>
                                             ))}
                                         </div>
@@ -309,34 +376,124 @@ function EmployeeDashboardInner({ empPosition = null }) {
                 </Card>
             </div>
 
-            {/* Row 2 — 70% of remaining height, split left 70% / right 30% */}
+            {/* Row 2 — DTR Table + Analytics */}
             <div style={{ flex: "7 0 0", minHeight: 0, display: "flex", gap: 12, overflow: "hidden" }}>
 
-                {/* Left Panel — 70% width */}
+                {/* Left — DTR Table */}
                 <div style={{ flex: "2 0 0", minWidth: 0, height: "100%", overflow: "hidden" }}>
                     <Card
                         size="small"
                         title={
-                            <span style={{ fontSize: "clamp(13px,1.4vw,16px)", fontWeight: 500, display: "flex", alignItems: "center", gap: 6 }}>
-                                <TableOutlined />
-                                Daily Time Record
+                            <span style={{ fontSize: "clamp(13px,1.4vw,16px)", fontWeight: 500, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                                <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                    <TableOutlined />Daily Time Record
+                                </span>
+                                <DatePicker
+                                    size="small"
+                                    value={selectedDate}
+                                    onChange={(date) => date && setSelectedDate(date)}
+                                    allowClear={false}
+                                    disabledDate={(d) => d.isAfter(dayjs())}
+                                    style={{ width: 130 }}
+                                />
                             </span>
                         }
                         style={{ height: "100%", background: token.colorBgContainer, border: `1px solid ${token.colorBorder}` }}
-                        styles={{ body: { padding: "12px 16px", height: "calc(100% - 40px)", overflow: "hidden" } }}
+                        styles={{ body: { padding: 0, height: "calc(100% - 40px)", overflow: "hidden", display: "flex", flexDirection: "column" } }}
                     >
-                        {/* Content goes here */}
+                        {dtrLoading ? (
+                            <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                <Spin indicator={<LoadingOutlined style={{ fontSize: 24 }} spin />} />
+                            </div>
+                        ) : dtrError ? (
+                            <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE}
+                                    description={<Text type="secondary" style={{ fontSize: 12 }}>{dtrError}</Text>} />
+                            </div>
+                        ) : (
+                            <div style={{ flex: 1, minHeight: 0, overflowX: "auto", overflowY: "auto" }}>
+                                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 1000 }}>
+                                    <thead>
+                                        <tr>
+                                            {[
+                                                { label: "Emp Name", align: "left",   width: 160 },
+                                                { label: "Shift",    align: "center", width: 90  },
+                                                { label: "Type",     align: "center", width: 75  },
+                                                ...timeColumns.map((c) => ({ label: c.label, align: "center", width: 72 })),
+                                                { label: "Remarks",  align: "center", width: 130 },
+                                            ].map((col) => (
+                                                <th key={col.label} style={{
+                                                    position: "sticky", top: 0, zIndex: 2,
+                                                    background: token.colorBgLayout,
+                                                    color: token.colorTextSecondary,
+                                                    fontWeight: 500, fontSize: 11,
+                                                    textTransform: "uppercase", letterSpacing: 0.4,
+                                                    padding: "8px 6px", textAlign: col.align,
+                                                    borderBottom: `1px solid ${token.colorBorder}`,
+                                                    minWidth: col.width, whiteSpace: "nowrap",
+                                                }}>
+                                                    {col.label}
+                                                </th>
+                                            ))}
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {dtrRows.length === 0 ? (
+                                            <tr>
+                                                <td colSpan={12} style={{ padding: "32px 0" }}>
+                                                    <Empty image={Empty.PRESENTED_IMAGE_SIMPLE}
+                                                        description={<Text type="secondary" style={{ fontSize: 12 }}>No records found</Text>} />
+                                                </td>
+                                            </tr>
+                                        ) : dtrRows.map((row, i) => {
+                                            const colors = getCellColors(row);
+                                            return (
+                                                <tr key={i} style={{ borderBottom: `1px solid ${token.colorBorder}` }}>
+                                                    <td style={{ padding: "5px 8px", fontWeight: 500, fontSize: 12, whiteSpace: "nowrap", borderLeft: row.is_night ? "3px solid #4096ff" : undefined }}>
+                                                        {row.emp_name || "—"}
+                                                    </td>
+                                                    <td style={{ padding: "5px 6px", textAlign: "center" }}>
+                                                        <Tag style={{ fontFamily: "monospace", fontSize: 10, margin: 0 }}>
+                                                            {row.code || "—"}
+                                                        </Tag>
+                                                    </td>
+                                                    <td style={{ padding: "5px 6px", textAlign: "center" }}>
+                                                        <Tag color={row.is_night ? "blue" : "success"} style={{ fontSize: 10, margin: 0 }}>
+                                                            {row.shift_type || "—"}
+                                                        </Tag>
+                                                    </td>
+                                                    {timeColumns.map(({ key, color }) => (
+                                                        <td key={key} style={{ padding: "5px 6px", textAlign: "center", backgroundColor: color(colors) }}>
+                                                            <span style={{ fontFamily: "monospace", fontSize: 11 }}>
+                                                                {row[key] || "--:--"}
+                                                            </span>
+                                                        </td>
+                                                    ))}
+                                                    <td style={{ padding: "5px 6px", textAlign: "center", backgroundColor: colors.rm }}>
+                                                        <div style={{ fontSize: 11, fontWeight: 600, lineHeight: 1.3 }}>
+                                                            {row.remarks}
+                                                            {row.is_night && (
+                                                                <MoonOutlined style={{ marginLeft: 4, fontSize: 10, color: "#ffa940" }} />
+                                                            )}
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
                     </Card>
                 </div>
 
-                {/* Right Panel — 30% width */}
+                {/* Right — Analytics */}
                 <div style={{ flex: "1 0 0", minWidth: 0, height: "100%", overflow: "hidden" }}>
                     <Card
                         size="small"
                         title={
                             <span style={{ fontSize: "clamp(13px,1.4vw,16px)", fontWeight: 500, display: "flex", alignItems: "center", gap: 6 }}>
-                                <ScheduleOutlined />
-                                Attendance Analytics
+                                <ScheduleOutlined />Attendance Analytics
                             </span>
                         }
                         style={{ height: "100%", background: token.colorBgContainer, border: `1px solid ${token.colorBorder}` }}
