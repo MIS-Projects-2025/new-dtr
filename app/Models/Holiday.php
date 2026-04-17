@@ -13,7 +13,7 @@ class Holiday extends Model
 
     protected $fillable = [
         'HOLIDAY_NAME',
-        'HOLIDAY_DATE',
+        'HOLIDAY_DATE', // format is 2025-12-31
         'HOLIDAY_TYPE',
         'CREATED_BY_EMP_NAME',
         'CREATED_BY_EMP_NUM',

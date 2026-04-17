@@ -1,16 +1,23 @@
 import AuthenticatedLayout from "@/Layouts/AuthenticatedLayout";
 import { Head, usePage } from "@inertiajs/react";
 
-export default function Dashboard({ tableData, tableFilters }) {
-    const props = usePage().props;
+import EmployeeDashboard from "@/Components/EmployeeDashboard";
+import AdminDashboard from "@/Components/AdminDashboard";
+
+export default function Dashboard() {
+    const { emp_data, employees } = usePage().props;
+
+    const emp_position = Number(emp_data?.emp_position);
 
     return (
         <AuthenticatedLayout>
             <Head title="Dashboard" />
 
-            <h1 className="text-2xl font-bold">Dashboard</h1>
-
-            {/* <pre>{JSON.stringify(props.emp_data, null, 2)}</pre> */}
+            {emp_position === 1 ? (
+                <EmployeeDashboard emp_data={emp_data} employees={employees} />
+            ) : (
+                <AdminDashboard emp_data={emp_data} />
+            )}
         </AuthenticatedLayout>
     );
 }

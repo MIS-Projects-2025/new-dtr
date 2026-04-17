@@ -1,207 +1,141 @@
 <?php
-
+// app/Repositories/AttendanceRepository.php
 namespace App\Repositories;
 
-use App\Models\EmployeeMasterlist;
 use App\Models\AttendanceLog;
 use App\Models\BiometricLog;
 use App\Models\BiometricLogManual;
+use App\Models\VPLog;
 use Carbon\Carbon;
-use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Collection;
 
 class AttendanceRepository
 {
-    // ── Punch-type normalisation map ─────────────────────────────────────────
-    // Both numeric legacy codes (AttendanceLog) and named string codes
-    // (BiometricLog / BiometricLogManual) are mapped to a canonical type.
-
-    private const TYPE_MAP = [
-        // Legacy numeric codes stored in AttendanceLog.log_type
-        '0' => 'check_in',
-        '1' => 'check_out',
-        '2' => 'break_out',
-        '3' => 'break_in',
-        '4' => 'lunch_out',
-        '5' => 'lunch_in',
-        // Named codes stored in BiometricLog / BiometricLogManual
-        'check_in'  => 'check_in',
-        'check_out' => 'check_out',
-        'break_out' => 'break_out',
-        'break_in'  => 'break_in',
-        'lunch_out' => 'lunch_out',
-        'lunch_in'  => 'lunch_in',
-    ];
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // PUBLIC API
-    // ─────────────────────────────────────────────────────────────────────────
-
-    /**
-     * Return all punch logs for an employee in a given month, keyed by date.
-     *
-     * The fetch window is extended by ±1 day to handle night-shift boundary
-     * punches that fall on the adjacent calendar day.
-     *
-     * Result shape:
-     *   [
-     *     'Y-m-d' => [
-     *       ['time' => 'HH:MM', 'type' => 'check_in', 'datetime' => '…', 'source' => 'biometric'],
-     *       …
-     *     ],
-     *     …
-     *   ]
-     */
-    public function getLogsForMonth(string $employId, string $month): array
+    // ── All 4 sources unified ──────────────────────────────────────────────
+    public function getLogsForDate(string $empId, string $date, array $logTypes): Collection
     {
-        $monthStart = Carbon::parse("{$month}-01");
-        $monthEnd   = $monthStart->copy()->endOfMonth();
-        $fetchFrom  = $monthStart->copy()->subDay()->format('Y-m-d');
-        $fetchTo    = $monthEnd->copy()->addDay()->format('Y-m-d');
+        $attendance = AttendanceLog::where('employid', $empId)
+            ->whereDate('logged_at', $date)
+            ->whereIn('log_type', $logTypes)
+            ->orderBy('logged_at')
+            ->get()
+            ->map(fn($l) => [
+                'log_type'  => $l->log_type,
+                'time'      => $l->logged_at->format('H:i:s'),
+                'timestamp' => $l->logged_at->timestamp,
+                'priority'  => 4,
+                'source'    => 'attendance',
+            ]);
 
-        $bioLogs = [];
+        $vp = VPLog::where('employee_id', $empId)
+            ->where('log_date', $date)
+            ->whereIn('log_type', $logTypes)
+            ->orderBy('log_time')
+            ->get()
+            ->map(fn($l) => [
+                'log_type'  => $l->log_type,
+                'time'      => Carbon::parse($l->log_time)->format('H:i:s'),
+                'timestamp' => Carbon::parse($date . ' ' . $l->log_time)->timestamp,
+                'priority'  => 3,
+                'source'    => 'vp',
+            ]);
 
-        $this->collectAttendanceLogs($employId, $fetchFrom, $fetchTo, $bioLogs);
-        $this->collectBiometricLogs($employId, $fetchFrom, $fetchTo, $bioLogs);
-        $this->collectBiometricManualLogs($employId, $fetchFrom, $fetchTo, $bioLogs);
+        $bio = BiometricLog::where('employid', $empId)
+            ->whereDate('datetime', $date)
+            ->whereIn('punch_type', ['check_in', 'check_out', 'break_in', 'break_out'])
+            ->orderBy('datetime')
+            ->get()
+            ->map(fn($l) => [
+                'log_type'  => $l->punch_type,
+                'time'      => Carbon::parse($l->datetime)->format('H:i:s'),
+                'timestamp' => Carbon::parse($l->datetime)->timestamp,
+                'priority'  => 2,
+                'source'    => 'biometric',
+            ]);
 
-        return $bioLogs;
+        $manual = BiometricLogManual::where('employid', $empId)
+            ->whereDate('datetime', $date)
+            ->whereIn('punch_type', ['check_in', 'check_out', 'break_in', 'break_out'])
+            ->orderBy('datetime')
+            ->get()
+            ->map(fn($l) => [
+                'log_type'  => $l->punch_type,
+                'time'      => Carbon::parse($l->datetime)->format('H:i:s'),
+                'timestamp' => Carbon::parse($l->datetime)->timestamp,
+                'priority'  => 1,
+                'source'    => 'biometric_manual',
+            ]);
+
+        return $attendance->concat($vp)->concat($bio)->concat($manual);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // PRIVATE COLLECTORS
-    // ─────────────────────────────────────────────────────────────────────────
-
-    /**
-     * Collect from attendance_logs (legacy, numeric punch types).
-     */
-    private function collectAttendanceLogs(
-        string $employId,
-        string $from,
-        string $to,
-        array &$bioLogs
-    ): void {
-        AttendanceLog::where('employid', $employId)
-    ->where('logged_at', '>=', $from . ' 00:00:00')
-    ->where('logged_at', '<=', $to   . ' 23:59:59')
-    ->orderBy('logged_at')
-    ->each(function ($record) use (&$bioLogs) {
-        $this->addLog(
-            $record->logged_at,
-            $record->log_type,
-            'attendance',
-            $bioLogs
-        );
-    });
+    public function hasCheckIn(string $empId, string $date): bool
+    {
+        return AttendanceLog::where('employid', $empId)->whereDate('logged_at', $date)->where('log_type', 'check_in')->exists()
+            || BiometricLog::where('employid', $empId)->whereDate('datetime', $date)->where('punch_type', 'check_in')->exists()
+            || BiometricLogManual::where('employid', $empId)->whereDate('datetime', $date)->where('punch_type', 'check_in')->exists()
+            || VPLog::where('employee_id', $empId)->where('log_date', $date)->where('log_type', 'check_in')->exists();
     }
 
-    /**
-     * Collect from biometric_logs (primary source).
-     * Uses the model relationship to benefit from the Eloquent connection config.
-     */
-    private function collectBiometricLogs(
-        string $employId,
-        string $from,
-        string $to,
-        array &$bioLogs
-    ): void {
-        BiometricLog::where('employid', $employId)
-    ->where('datetime', '>=', $from . ' 00:00:00')
-    ->where('datetime', '<=', $to   . ' 23:59:59')
-    ->orderBy('datetime')
-    ->each(function ($record) use (&$bioLogs) {
-        $this->addLog(
-            $record->datetime,
-            $record->punch_type,
-            'biometric',
-            $bioLogs
-        );
-    });
+    public function hasCheckOut(string $empId, string $date): bool
+    {
+        return AttendanceLog::where('employid', $empId)->whereDate('logged_at', $date)->where('log_type', 'check_out')->exists()
+            || BiometricLog::where('employid', $empId)->whereDate('datetime', $date)->where('punch_type', 'check_out')->exists()
+            || BiometricLogManual::where('employid', $empId)->whereDate('datetime', $date)->where('punch_type', 'check_out')->exists()
+            || VPLog::where('employee_id', $empId)->where('log_date', $date)->where('log_type', 'check_out')->exists();
     }
 
-    /**
-     * Collect from biometric_logs_manual (HR-entered overrides).
-     */
-    private function collectBiometricManualLogs(
-        string $employId,
-        string $from,
-        string $to,
-        array &$bioLogs
-    ): void {
-        BiometricLogManual::where('employid', $employId)
-    ->where('datetime', '>=', $from . ' 00:00:00')
-    ->where('datetime', '<=', $to   . ' 23:59:59')
-    ->orderBy('datetime')
-    ->each(function ($record) use (&$bioLogs) {
-        $this->addLog(
-            $record->datetime,
-            $record->punch_type,
-            'manual',
-            $bioLogs
-        );
-    });
-    }
+    public function getEarliestCheckIn(string $empId, string $date): ?Carbon
+    {
+        $times = collect([
+            AttendanceLog::where('employid', $empId)->whereDate('logged_at', $date)->where('log_type', 'check_in')->orderBy('logged_at')->value('logged_at'),
+            BiometricLog::where('employid', $empId)->whereDate('datetime', $date)->where('punch_type', 'check_in')->orderBy('datetime')->value('datetime'),
+            BiometricLogManual::where('employid', $empId)->whereDate('datetime', $date)->where('punch_type', 'check_in')->orderBy('datetime')->value('datetime'),
+        ])->filter()->map(fn($t) => Carbon::parse($t));
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // HELPERS
-    // ─────────────────────────────────────────────────────────────────────────
+        $vpTime = VPLog::where('employee_id', $empId)
+            ->where('log_date', $date)
+            ->where('log_type', 'check_in')
+            ->orderBy('log_time')
+            ->first();
 
-    /**
-     * Normalise and push a single punch into the $bioLogs accumulator.
-     *
-     * @param  mixed  $datetime  Carbon instance, datetime string, or null
-     * @param  mixed  $punchType Raw punch type value (numeric string or named string)
-     * @param  string $source    'attendance' | 'biometric' | 'manual'
-     */
-    private function addLog(
-        mixed  $datetime,
-        mixed  $punchType,
-        string $source,
-        array &$bioLogs
-    ): void {
-        if (empty($datetime) || empty($punchType)) {
-            return;
+        if ($vpTime) {
+            $times->push(Carbon::parse($date . ' ' . $vpTime->log_time));
         }
 
-        $dt      = Carbon::parse($datetime);
-        $date    = $dt->format('Y-m-d');
-        $time    = $dt->format('H:i');
-        $typeKey = strtolower(trim((string) $punchType));
-        $type    = self::TYPE_MAP[$typeKey] ?? null;
-
-        if ($type === null) {
-            return; // unknown punch type — silently skip
-        }
-
-        $bioLogs[$date][] = [
-            'time'     => $time,
-            'type'     => $type,
-            'datetime' => (string) $datetime,
-            'source'   => $source,
-        ];
+        return $times->isEmpty() ? null : $times->min();
     }
 
-    /**
- * Build the same date-keyed log array from already-loaded relations
- * instead of hitting the DB again.
- */
-public function getLogsFromModel(EmployeeMasterlist $emp, string $month): array
-{
-    $bioLogs = [];
+    public function getLastSeenDate(string $empId, string $beforeDate): ?string
+    {
+        $sources = collect([
+            AttendanceLog::where('employid', $empId)->whereDate('logged_at', '<', $beforeDate)->orderByDesc('logged_at')->value('logged_at'),
+            BiometricLog::where('employid', $empId)->whereDate('datetime', '<', $beforeDate)->orderByDesc('datetime')->value('datetime'),
+            BiometricLogManual::where('employid', $empId)->whereDate('datetime', '<', $beforeDate)->orderByDesc('datetime')->value('datetime'),
+            VPLog::where('employee_id', $empId)->where('log_date', '<', $beforeDate)->orderByDesc('log_date')->value('log_date'),
+        ])->filter()->map(fn($d) => Carbon::parse($d))->sortByDesc(fn($d) => $d);
 
-    foreach ($emp->attendanceLogs as $record) {
-        $this->addLog($record->logged_at, $record->log_type, 'attendance', $bioLogs);
+        return $sources->first()?->format('M d');
     }
 
-    foreach ($emp->biometricLogs as $record) {
-        $this->addLog($record->datetime, $record->punch_type, 'biometric', $bioLogs);
+    // For batch queries (Admin dashboard — all employees at once)
+    public function getBatchCheckInsForDate(array $empIds, string $date): array
+    {
+        $attendance = AttendanceLog::whereIn('employid', $empIds)->whereDate('logged_at', $date)->where('log_type', 'check_in')->pluck('employid')->toArray();
+        $bio        = BiometricLog::whereIn('employid', $empIds)->whereDate('datetime', $date)->where('punch_type', 'check_in')->pluck('employid')->toArray();
+        $manual     = BiometricLogManual::whereIn('employid', $empIds)->whereDate('datetime', $date)->where('punch_type', 'check_in')->pluck('employid')->toArray();
+        $vp         = VPLog::whereIn('employee_id', $empIds)->where('log_date', $date)->where('log_type', 'check_in')->pluck('employee_id')->toArray();
+
+        return array_unique(array_merge($attendance, $bio, $manual, $vp));
     }
 
-    foreach ($emp->biometricLogsManual as $record) {
-        $this->addLog($record->datetime, $record->punch_type, 'manual', $bioLogs);
+    public function getBatchCheckOutsForDate(array $empIds, string $date): array
+    {
+        $attendance = AttendanceLog::whereIn('employid', $empIds)->whereDate('logged_at', $date)->where('log_type', 'check_out')->pluck('employid')->toArray();
+        $bio        = BiometricLog::whereIn('employid', $empIds)->whereDate('datetime', $date)->where('punch_type', 'check_out')->pluck('employid')->toArray();
+        $manual     = BiometricLogManual::whereIn('employid', $empIds)->whereDate('datetime', $date)->where('punch_type', 'check_out')->pluck('employid')->toArray();
+        $vp         = VPLog::whereIn('employee_id', $empIds)->where('log_date', $date)->where('log_type', 'check_out')->pluck('employee_id')->toArray();
+
+        return array_unique(array_merge($attendance, $bio, $manual, $vp));
     }
-
-    return $bioLogs;
-}
-
-
 }

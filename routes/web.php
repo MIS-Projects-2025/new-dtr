@@ -14,6 +14,7 @@ require __DIR__ . '/general.php';
 require __DIR__ . '/fingerprint.php';
 require __DIR__ . '/scan.php';
 require __DIR__ . '/dailytimerecord.php';
+require __DIR__ . '/dashboard.php';
 
 
 Route::get("/demo", [DemoController::class, 'index'])->name('demo');
