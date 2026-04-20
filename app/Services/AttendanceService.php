@@ -19,13 +19,9 @@ class AttendanceService
         string $endDate,
         array  $shiftMap   // dateKey => ShiftCode model|null
     ): array {
-        $start   = Carbon::parse($startDate)->startOfDay();
-        $end     = Carbon::parse($endDate)->endOfDay();
-        $today   = Carbon::today();
-
-        if ($end->gt($today)) {
-            $end = $today->copy()->endOfDay();
-        }
+        $today      = Carbon::today();
+        $end        = Carbon::parse($endDate)->gt($today) ? $today->copy() : Carbon::parse($endDate);
+        $effectiveEnd = $end->toDateString();
 
         $result = [
             'present' => 0, 'absent'  => 0,
@@ -34,16 +30,19 @@ class AttendanceService
             'late_dates'    => [], 'restday_dates' => [],
         ];
 
-        $current = $start->copy();
-        while ($current->lte($end)) {
-            $dateKey  = $current->format('Y-m-d');
-            $label    = $current->format('M d, Y');
-            $shift    = $shiftMap[$dateKey] ?? null;
-            $isRestDay = $this->isRestDayShift($shift);
+        // Single batch load for the entire date range — replaces per-day hasCheckIn/hasCheckOut/getEarliestCheckIn queries
+        $logMap = $this->attendanceRepo->getCheckInOutMapForRange($empId, $startDate, $effectiveEnd);
 
-            $hasIn  = $this->attendanceRepo->hasCheckIn($empId,  $dateKey);
-            $hasOut = $this->attendanceRepo->hasCheckOut($empId, $dateKey);
-            $hasAny = $hasIn || $hasOut;
+        $current = Carbon::parse($startDate)->startOfDay();
+        while ($current->lte($end)) {
+            $dateKey   = $current->format('Y-m-d');
+            $label     = $current->format('M d, Y');
+            $shift     = $shiftMap[$dateKey] ?? null;
+            $isRestDay = $this->isRestDayShift($shift);
+            $dayLogs   = $logMap[$dateKey] ?? [];
+            $hasIn     = !empty($dayLogs['check_in']);
+            $hasOut    = !empty($dayLogs['check_out']);
+            $hasAny    = $hasIn || $hasOut;
 
             if ($isRestDay) {
                 if ($hasAny) {
@@ -57,10 +56,10 @@ class AttendanceService
                 $result['present']++;
                 $result['present_dates'][] = $label;
 
-                // Late check
+                // Late check — uses pre-loaded earliest_check_in, no extra query
                 if ($hasIn && $shift && !empty($shift->TIME_WINDOWS[0])) {
-                    $earliest  = $this->attendanceRepo->getEarliestCheckIn($empId, $dateKey);
-                    $expected  = Carbon::parse($dateKey . ' ' . $shift->TIME_WINDOWS[0]);
+                    $earliest = $dayLogs['earliest_check_in'] ?? null;
+                    $expected = Carbon::parse($dateKey . ' ' . $shift->TIME_WINDOWS[0]);
                     if ($earliest && $earliest->gt($expected)) {
                         $result['late']++;
                         $result['late_dates'][] = $label;

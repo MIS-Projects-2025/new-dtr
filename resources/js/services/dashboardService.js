@@ -13,4 +13,7 @@ export const dashboardService = {
 
     getAttendanceCounter: (empId, startDate, endDate) =>
         axios.get(`${base}/attendance-counter`, { params: { emp_id: empId, start_date: startDate, end_date: endDate } }),
+
+    getManagementPresence: () =>
+        axios.get(`${base}/management-presence`),
 };

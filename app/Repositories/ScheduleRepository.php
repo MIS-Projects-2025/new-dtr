@@ -11,22 +11,22 @@ use Illuminate\Support\Collection;
 
 class ScheduleRepository
 {
-    public function getScheduleForDate(string $empId, string $date): ?WorkScheduler
+public function getScheduleForDate(string $empId, string $date): ?WorkScheduler
     {
         return WorkScheduler::where('EMPID', $empId)
-            ->whereDate('PAYROLL_DATE_START', '<=', $date)
-            ->whereDate('PAYROLL_DATE_END',   '>=', $date)
-            ->select(['SCHEDULE', 'PAYROLL_DATE_START', 'PAYROLL_DATE_END', 'SHIFT'])
+            ->where('PAYROLL_DATE_START', '<=', $date)
+            ->where('PAYROLL_DATE_END',   '>=', $date)
+            ->select(['EMPID', 'SCHEDULE', 'PAYROLL_DATE_START', 'PAYROLL_DATE_END', 'SHIFT'])
             ->first();
     }
 
     // Used by admin dashboard index — loads all at once
     public function getSchedulesForToday(): Collection
     {
-        $today = Carbon::today();
+        $today = Carbon::today()->toDateString();
 
-        return WorkScheduler::whereDate('PAYROLL_DATE_START', '<=', $today)
-            ->whereDate('PAYROLL_DATE_END',   '>=', $today)
+        return WorkScheduler::where('PAYROLL_DATE_START', '<=', $today)
+            ->where('PAYROLL_DATE_END',   '>=', $today)
             ->get()
             ->keyBy('EMPID');
     }

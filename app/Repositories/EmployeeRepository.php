@@ -15,6 +15,7 @@ class EmployeeRepository
             ->whereIn('EMPPOSITION', [2, 3, 4, 5])
             ->when(!empty($excludeIds),       fn($q) => $q->whereNotIn('EMPLOYID', $excludeIds))
             ->when(!empty($excludeProdlines), fn($q) => $q->whereNotIn('PRODLINE', $excludeProdlines))
+            ->select(['EMPLOYID', 'EMPNAME', 'JOB_TITLE', 'DEPARTMENT', 'EMPPOSITION', 'PRODLINE'])
             ->get();
     }
 

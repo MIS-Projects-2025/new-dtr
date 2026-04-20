@@ -13,12 +13,13 @@ import {
     AlertCircle,
     Loader2,
 } from "lucide-react";
-import { Tooltip, Skeleton, Card, Spin } from 'antd';
+import { Tooltip } from 'antd';
 import { useWorkSchedule } from "@/hooks/useWorkSchedule";
 import { useShiftLogs } from "@/hooks/useShiftLogs";
 import { useAttendanceCounter } from "@/hooks/useAttendanceCounter";
+import { useManagementPresence } from "@/hooks/useManagementPresence";
 
-export default function EmployeeDashboard({ emp_data, employees = []}) {
+export default function EmployeeDashboard({ emp_data }) {
     const [empData, setEmpData] = useState(null);
     const [attendanceView, setAttendanceView] = useState("weekly");
     const [periodValue, setPeriodValue] = useState("");
@@ -32,9 +33,10 @@ export default function EmployeeDashboard({ emp_data, employees = []}) {
         return `${year}-${month}-${day}`;
     });
 
-    // Use the hooks
+    // Use the hooks — useShiftLogs waits for workSchedule to avoid duplicate schedule queries
     const { workSchedule, isLoading: isLoadingSchedule } = useWorkSchedule(emp_data?.emp_id, selectedDate);
-    const { logs: selectedDateLogs, isLoading: isLoadingLogs } = useShiftLogs(emp_data?.emp_id, selectedDate);
+    const { logs: selectedDateLogs, isLoading: isLoadingLogs } = useShiftLogs(emp_data?.emp_id, selectedDate, workSchedule);
+    const { employees, isLoading: isLoadingEmployees } = useManagementPresence();
     
     // ================= FILTER GENERATORS =================
     const toLocalDateString = (date) => {
@@ -301,49 +303,6 @@ export default function EmployeeDashboard({ emp_data, employees = []}) {
             ))}
         </div>
     );
-
-    // Skeleton for attendance counter
-    const AttendanceCounterSkeleton = () => (
-        <div className="grid grid-cols-2 gap-2">
-            {[1, 2, 3, 4].map((i) => (
-                <Card key={i} className="border rounded-md p-2 min-h-[90px]">
-                    <Skeleton 
-                        active 
-                        paragraph={{ rows: 1, width: '50%' }}
-                        title={false}
-                        avatar={false}
-                    />
-                    <div className="mt-2">
-                        <Skeleton.Button active size="small" block />
-                    </div>
-                </Card>
-            ))}
-        </div>
-    );
-
-    // Skeleton for employee list
-    const EmployeeListSkeleton = () => (
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2">
-            {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((i) => (
-                <Card key={i} className="border rounded-lg p-3 h-[110px]">
-                    <Skeleton 
-                        active 
-                        paragraph={{ rows: 3, width: ['90%', '70%', '80%'] }}
-                        title={{ width: '60%' }}
-                        avatar={false}
-                    />
-                </Card>
-            ))}
-        </div>
-    );
-
-    // Loading overlay component
-    const LoadingOverlay = () => (
-        <div className="absolute inset-0 bg-white/50 dark:bg-gray-900/50 backdrop-blur-sm flex items-center justify-center z-10 rounded-lg">
-            <Spin size="large" tip="Loading..." />
-        </div>
-    );
-
     return (
         <div className="w-full h-screen flex flex-col gap-3 p-2 sm:p-3 lg:p-4 overflow-hidden relative">
             {/* No Schedule Modal */}
@@ -442,10 +401,10 @@ export default function EmployeeDashboard({ emp_data, employees = []}) {
                         />
                     </div>
 
-                    {/* Show skeleton while loading */}
-                    {(isLoadingSchedule || isLoadingLogs) && <ShiftLogsSkeleton />}
-                    
-                    {/* Show actual content when loaded */}
+                    {(isLoadingSchedule || isLoadingLogs) && (
+                        <div className="flex items-center justify-center h-24 text-xs text-gray-400">Loading...</div>
+                    )}
+
                     {!isLoadingSchedule && !isLoadingLogs && (
                         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
                             {shiftSlots.map((item, index) => {
@@ -541,10 +500,10 @@ export default function EmployeeDashboard({ emp_data, employees = []}) {
                         </div>
                     </div>
                     
-                    {/* Show skeleton while loading */}
-                    {isLoadingCounter && <AttendanceCounterSkeleton />}
-                    
-                    {/* Show actual content when loaded */}
+                    {isLoadingCounter && (
+                        <div className="flex items-center justify-center h-24 text-xs text-gray-400">Loading...</div>
+                    )}
+
                     {!isLoadingCounter && (
                         <div className="flex-1 grid grid-cols-2 gap-2">
                             {[
@@ -638,11 +597,11 @@ export default function EmployeeDashboard({ emp_data, employees = []}) {
                     />
                 </div>
                 
-                {/* Show skeleton while employees are loading */}
-                {employees.length === 0 && <EmployeeListSkeleton />}
-                
-                {/* Show actual content when loaded */}
-                {employees.length > 0 && (
+                {isLoadingEmployees && (
+                    <div className="flex items-center justify-center h-24 text-xs text-gray-400">Loading...</div>
+                )}
+
+                {!isLoadingEmployees && employees.length > 0 && (
                     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2 flex-1 min-h-0 content-start overflow-y-auto">
                         {filteredEmployees.map((emp) => (
                             <div

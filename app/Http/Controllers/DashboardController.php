@@ -25,14 +25,22 @@ class DashboardController extends Controller
     public function index(Request $request)
     {
         $emp_data = session('emp_data');
-        
-        // Use the service to get management presence
-        $employees = $this->employeeStatusService->getManagementPresence();
 
+        // employees is no longer passed here — loaded lazily via API after page renders
         return Inertia::render('Dashboard', [
-            'emp_data'  => $emp_data,
-            'employees' => $employees,
+            'emp_data' => $emp_data,
         ]);
+    }
+
+    public function getManagementPresence(Request $request)
+    {
+        try {
+            $employees = $this->employeeStatusService->getManagementPresence();
+            return response()->json($employees);
+        } catch (\Exception $e) {
+            \Log::error('Management presence error: ' . $e->getMessage());
+            return response()->json([], 500);
+        }
     }
 
     public function getWorkSchedule(Request $request)
@@ -67,13 +75,13 @@ class DashboardController extends Controller
     public function getAttendanceCounter(Request $request)
     {
         try {
-            $empId = $request->emp_id;
+            $empId     = $request->emp_id;
             $startDate = $request->start_date;
-            $endDate = $request->end_date;
-            
+            $endDate   = $request->end_date;
+
             // Build shift map for the date range
             $shiftMap = $this->buildShiftMapForDateRange($empId, $startDate, $endDate);
-            
+
             // Use the service to compute counter
             $counter = $this->attendanceService->computeCounter(
                 $empId,
@@ -81,7 +89,7 @@ class DashboardController extends Controller
                 $endDate,
                 $shiftMap
             );
-            
+
             return response()->json($counter);
         } catch (\Exception $e) {
             \Log::error('Attendance counter error: ' . $e->getMessage());

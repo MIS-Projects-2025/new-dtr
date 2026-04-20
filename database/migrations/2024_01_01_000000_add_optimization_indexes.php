@@ -3,77 +3,108 @@
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
-class AddOptimizationIndexes extends Migration
+return new class extends Migration
 {
-    public function up()
+    /**
+     * Connections map — mirrors what each Model defines.
+     *
+     * 'dtr'      => attendance_logs, biometric_logs, biometric_logs_manual, vp_logs
+     * 'calendar' => work_scheduler, holidays
+     * 'leave'    => employee_leaves
+     */
+
+    public function up(): void
     {
-        // Attendance logs indexes
-        Schema::table('attendance_logs', function (Blueprint $table) {
+        // ── DTR connection ────────────────────────────────────────────────
+
+        // attendance_logs  (connection: dtr)
+        Schema::connection('dtr')->table('attendance_logs', function (Blueprint $table) {
+            $this->dropIndexIfExists('dtr', 'attendance_logs', 'idx_attendance_optimized');
             $table->index(['employid', 'logged_at', 'log_type'], 'idx_attendance_optimized');
         });
-        
-        // Biometric logs indexes
-        Schema::table('biometric_logs', function (Blueprint $table) {
+
+        // biometric_logs  (connection: dtr)
+        Schema::connection('dtr')->table('biometric_logs', function (Blueprint $table) {
+            $this->dropIndexIfExists('dtr', 'biometric_logs', 'idx_biometric_optimized');
             $table->index(['employid', 'datetime', 'punch_type'], 'idx_biometric_optimized');
         });
-        
-        // Biometric logs manual indexes
-        Schema::table('biometric_logs_manual', function (Blueprint $table) {
+
+        // biometric_logs_manual  (connection: dtr)
+        Schema::connection('dtr')->table('biometric_logs_manual', function (Blueprint $table) {
+            $this->dropIndexIfExists('dtr', 'biometric_logs_manual', 'idx_biometric_manual_optimized');
             $table->index(['employid', 'datetime', 'punch_type'], 'idx_biometric_manual_optimized');
         });
-        
-        // VP logs indexes
-        Schema::table('vp_logs', function (Blueprint $table) {
+
+        // vp_logs  (connection: dtr)
+        Schema::connection('dtr')->table('vp_logs', function (Blueprint $table) {
+            $this->dropIndexIfExists('dtr', 'vp_logs', 'idx_vp_optimized');
             $table->index(['employee_id', 'log_date', 'log_type'], 'idx_vp_optimized');
         });
-        
-        // Work scheduler indexes
-        Schema::table('work_schedulers', function (Blueprint $table) {
+
+        // ── Calendar connection ───────────────────────────────────────────
+
+        // work_scheduler  (connection: calendar)
+        Schema::connection('calendar')->table('work_scheduler', function (Blueprint $table) {
+            $this->dropIndexIfExists('calendar', 'work_scheduler', 'idx_work_scheduler_optimized');
             $table->index(['EMPID', 'PAYROLL_DATE_START', 'PAYROLL_DATE_END'], 'idx_work_scheduler_optimized');
         });
-        
-        // Employee leaves indexes
-        Schema::table('employee_leaves', function (Blueprint $table) {
-            $table->index(['EMPLOYID', 'DATESTART', 'DATEEND', 'LEAVESTATUS'], 'idx_leaves_optimized');
+
+        // holidays  (connection: calendar)
+        Schema::connection('calendar')->table('holidays', function (Blueprint $table) {
+            $this->dropIndexIfExists('calendar', 'holidays', 'idx_holiday_date');
+            $table->index(['HOLIDAY_DATE'], 'idx_holiday_date');
         });
-        
-        // Holidays index
-        Schema::table('holidays', function (Blueprint $table) {
-            $table->index('HOLIDAY_DATE', 'idx_holiday_date');
+
+        // ── Leave connection ──────────────────────────────────────────────
+
+        // employee_leaves  (connection: leave)
+        Schema::connection('leave')->table('employee_leaves', function (Blueprint $table) {
+            $this->dropIndexIfExists('leave', 'employee_leaves', 'idx_leaves_optimized');
+            $table->index(['EMPLOYID', 'DATESTART', 'DATEEND', 'LEAVESTATUS'], 'idx_leaves_optimized');
         });
     }
 
-    public function down()
+    private function dropIndexIfExists(string $connection, string $table, string $indexName): void
     {
-        Schema::table('attendance_logs', function (Blueprint $table) {
+        $exists = DB::connection($connection)
+            ->select("SHOW INDEX FROM `{$table}` WHERE Key_name = ?", [$indexName]);
+
+        if (!empty($exists)) {
+            DB::connection($connection)->statement("ALTER TABLE `{$table}` DROP INDEX `{$indexName}`");
+        }
+    }
+
+    public function down(): void
+    {
+        Schema::connection('dtr')->table('attendance_logs', function (Blueprint $table) {
             $table->dropIndex('idx_attendance_optimized');
         });
-        
-        Schema::table('biometric_logs', function (Blueprint $table) {
+
+        Schema::connection('dtr')->table('biometric_logs', function (Blueprint $table) {
             $table->dropIndex('idx_biometric_optimized');
         });
-        
-        Schema::table('biometric_logs_manual', function (Blueprint $table) {
+
+        Schema::connection('dtr')->table('biometric_logs_manual', function (Blueprint $table) {
             $table->dropIndex('idx_biometric_manual_optimized');
         });
-        
-        Schema::table('vp_logs', function (Blueprint $table) {
+
+        Schema::connection('dtr')->table('vp_logs', function (Blueprint $table) {
             $table->dropIndex('idx_vp_optimized');
         });
-        
-        Schema::table('work_schedulers', function (Blueprint $table) {
+
+        Schema::connection('calendar')->table('work_scheduler', function (Blueprint $table) {
             $table->dropIndex('idx_work_scheduler_optimized');
         });
-        
-        Schema::table('employee_leaves', function (Blueprint $table) {
-            $table->dropIndex('idx_leaves_optimized');
-        });
-        
-        Schema::table('holidays', function (Blueprint $table) {
+
+        Schema::connection('calendar')->table('holidays', function (Blueprint $table) {
             $table->dropIndex('idx_holiday_date');
         });
+
+        Schema::connection('leave')->table('employee_leaves', function (Blueprint $table) {
+            $table->dropIndex('idx_leaves_optimized');
+        });
     }
-}
+};

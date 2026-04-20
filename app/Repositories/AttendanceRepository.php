@@ -8,6 +8,7 @@ use App\Models\BiometricLogManual;
 use App\Models\VPLog;
 use Carbon\Carbon;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 
 class AttendanceRepository
 {
@@ -129,7 +130,7 @@ class AttendanceRepository
         return array_unique(array_merge($attendance, $bio, $manual, $vp));
     }
 
-    public function getBatchCheckOutsForDate(array $empIds, string $date): array
+public function getBatchCheckOutsForDate(array $empIds, string $date): array
     {
         $attendance = AttendanceLog::whereIn('employid', $empIds)->whereDate('logged_at', $date)->where('log_type', 'check_out')->pluck('employid')->toArray();
         $bio        = BiometricLog::whereIn('employid', $empIds)->whereDate('datetime', $date)->where('punch_type', 'check_out')->pluck('employid')->toArray();
@@ -137,5 +138,56 @@ class AttendanceRepository
         $vp         = VPLog::whereIn('employee_id', $empIds)->where('log_date', $date)->where('log_type', 'check_out')->pluck('employee_id')->toArray();
 
         return array_unique(array_merge($attendance, $bio, $manual, $vp));
+    }
+
+    public function getCheckInOutMapForRange(string $empId, string $startDate, string $endDate): array
+    {
+        $logTypes = ['check_in', 'check_out'];
+
+        $attendance = AttendanceLog::where('employid', $empId)
+            ->whereBetween('logged_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
+            ->whereIn('log_type', $logTypes)
+            ->selectRaw('DATE(logged_at) as log_date, log_type, MIN(logged_at) as earliest')
+            ->groupBy(DB::raw('DATE(logged_at)'), 'log_type')
+            ->get();
+
+        $vp = VPLog::where('employee_id', $empId)
+            ->whereBetween('log_date', [$startDate, $endDate])
+            ->whereIn('log_type', $logTypes)
+            ->selectRaw('log_date, log_type, MIN(log_time) as earliest')
+            ->groupBy('log_date', 'log_type')
+            ->get();
+
+        $bio = BiometricLog::where('employid', $empId)
+            ->whereBetween('datetime', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
+            ->whereIn('punch_type', $logTypes)
+            ->selectRaw('DATE(datetime) as log_date, punch_type as log_type, MIN(datetime) as earliest')
+            ->groupBy(DB::raw('DATE(datetime)'), 'punch_type')
+            ->get();
+
+        $manual = BiometricLogManual::where('employid', $empId)
+            ->whereBetween('datetime', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
+            ->whereIn('punch_type', $logTypes)
+            ->selectRaw('DATE(datetime) as log_date, punch_type as log_type, MIN(datetime) as earliest')
+            ->groupBy(DB::raw('DATE(datetime)'), 'punch_type')
+            ->get();
+
+        $map = [];
+
+        foreach ($attendance->concat($vp)->concat($bio)->concat($manual) as $row) {
+            $date = $row->log_date;
+            $type = $row->log_type;
+            $map[$date][$type] = true;
+
+            if ($type === 'check_in') {
+                $current  = Carbon::parse($row->earliest);
+                $existing = $map[$date]['earliest_check_in'] ?? null;
+                if (!$existing || $current->lt($existing)) {
+                    $map[$date]['earliest_check_in'] = $current;
+                }
+            }
+        }
+
+        return $map;
     }
 }
