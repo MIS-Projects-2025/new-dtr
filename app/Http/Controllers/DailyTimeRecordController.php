@@ -2,25 +2,16 @@
 
 namespace App\Http\Controllers;
 
-use App\Http\Requests\DtrRequest;
-use App\Services\DailyTimeRecordService;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
-use Inertia\Response;
+use Carbon\Carbon;
 
 class DailyTimeRecordController extends Controller
 {
-    public function __construct(
-        private readonly DailyTimeRecordService $dtrService
-    ) {}
 
-    public function index(DtrRequest $request): Response
+    public function index(Request $request)
     {
-        $month    = $request->month();
-        $employId = session('emp_data.emp_id');
-
-        return Inertia::render('DailyTimeRecord', [
-            'tableData'    => $this->dtrService->getTableData($employId, $month),
-            'tableFilters' => ['month' => $month],
-        ]);
+        return Inertia::render('DailyTimeRecord');
     }
 }
