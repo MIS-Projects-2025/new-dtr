@@ -6,6 +6,7 @@ use Illuminate\Http\Request;
 use App\Services\EmployeeStatusService;
 use App\Services\ScheduleService;
 use App\Services\AttendanceService;
+use App\Services\EmployeeService;
 use App\Repositories\ScheduleRepository;
 use App\Repositories\AttendanceRepository;
 use Illuminate\Support\Facades\Auth;
@@ -19,7 +20,8 @@ class DashboardController extends Controller
         private ScheduleService $scheduleService,
         private AttendanceService $attendanceService,
         private ScheduleRepository $scheduleRepo,
-        private AttendanceRepository $attendanceRepo
+        private AttendanceRepository $attendanceRepo,
+        private EmployeeService $employeeService, 
     ) {}
 
     public function index(Request $request)
@@ -29,6 +31,7 @@ class DashboardController extends Controller
         // employees is no longer passed here — loaded lazily via API after page renders
         return Inertia::render('Dashboard', [
             'emp_data' => $emp_data,
+            'app_name' => env('APP_NAME', '')
         ]);
     }
 
@@ -130,4 +133,32 @@ class DashboardController extends Controller
         
         return $shiftMap;
     }
+    public function getFilteredEmployees(Request $request)
+        {
+            try {
+                $filters = $request->only(['company', 'prodline', 'department', 'station']);
+                $result  = $this->employeeService->getFilteredWithOptions($filters);
+
+                return response()->json($result);
+            } catch (\Exception $e) {
+                \Log::error('Filtered employees error: ' . $e->getMessage());
+                return response()->json(['error' => $e->getMessage()], 500);
+            }
+        }
+
+public function getDtrRows(Request $request)
+{
+    try {
+        $filters = $request->only(['company', 'prodline', 'department', 'station']);
+        $page    = (int) $request->get('page', 1);
+        $search  = (string) $request->get('search', '');
+        $date    = $request->get('date', now()->toDateString());
+        $result  = $this->employeeService->getDtrRows($filters, $page, 15, $search, $date);
+
+        return response()->json($result);
+    } catch (\Exception $e) {
+        \Log::error('DTR rows error: ' . $e->getMessage());
+        return response()->json(['error' => $e->getMessage()], 500);
+    }
+}
 }

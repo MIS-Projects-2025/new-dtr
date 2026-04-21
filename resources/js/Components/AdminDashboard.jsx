@@ -1,4 +1,5 @@
-import { useState, Fragment } from "react";
+import { useState, useEffect, Fragment } from "react";  // add useEffect
+import { usePage } from "@inertiajs/react"; 
 
 const COL_HEADERS = ["Expected", "Present", "%", "Absent", "%"];
 
@@ -184,7 +185,7 @@ const AttendanceAnalytics = () => {
     );
 };
 
-const DailyTimeRecord = () => (
+const DailyTimeRecord = ({ rows = [], meta, page, onPageChange, loading, searchInput = '', onSearchChange }) => (
     <div className="flex flex-col rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-sm overflow-hidden min-h-0">
         <div className="px-4 py-2 border-b border-zinc-200 dark:border-zinc-700 flex items-center justify-between gap-2 flex-shrink-0 flex-wrap">
             <p className="text-[10px] font-medium text-zinc-400 uppercase tracking-widest whitespace-nowrap">
@@ -208,11 +209,13 @@ const DailyTimeRecord = () => (
                     <svg className="absolute left-2 top-1/2 -translate-y-1/2 w-2.5 h-2.5 text-zinc-400 pointer-events-none" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
                     </svg>
-                    <input
-                        type="text"
-                        placeholder="Search employee..."
-                        className="text-[10px] rounded-md border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 pl-6 pr-3 py-1 focus:outline-none focus:ring-1 focus:ring-zinc-400 w-36"
-                    />
+<input
+    type="text"
+    placeholder="Search employee..."
+    value={searchInput}
+    onChange={(e) => onSearchChange(e.target.value)}
+    className="text-[10px] rounded-md border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 pl-6 pr-3 py-1 focus:outline-none focus:ring-1 focus:ring-zinc-400 w-36"
+/>
                 </div>
             </div>
         </div>
@@ -243,44 +246,158 @@ const DailyTimeRecord = () => (
                         ))}
                     </tr>
                 </thead>
-                <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-                    <tr>
-                        <td colSpan={12} className="px-3 py-4 text-center text-zinc-400 dark:text-zinc-500 italic">
-                            No records available.
-                        </td>
-                    </tr>
-                </tbody>
+<tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+    {loading ? (
+        <tr>
+            <td colSpan={12} className="px-3 py-4 text-center text-zinc-400 dark:text-zinc-500 italic">
+                Loading...
+            </td>
+        </tr>
+    ) : rows.length === 0 ? (
+        <tr>
+            <td colSpan={12} className="px-3 py-4 text-center text-zinc-400 dark:text-zinc-500 italic">
+                No records available.
+            </td>
+        </tr>
+    ) : (
+        rows.map((row) => (
+            <tr key={row.EMPLOYID} className="hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
+                <td className="px-2 py-1.5 truncate">{row.EMPNAME}</td>
+                <td className="px-2 py-1.5 truncate">{row.SHIFTCODE}</td>
+                <td className="px-2 py-1.5 truncate">{row.SHIFT_TYPE}</td>
+                <td className="px-2 py-1.5 truncate">{row['Time In (actual)'] ?? '--'}</td>
+                <td className="px-2 py-1.5 truncate">{row['Break Out 1 (actual)'] ?? '--'}</td>
+                <td className="px-2 py-1.5 truncate">{row['Break In 1 (actual)'] ?? '--'}</td>
+                <td className="px-2 py-1.5 truncate">{row['Lunch Out (actual)'] ?? '--'}</td>
+                <td className="px-2 py-1.5 truncate">{row['Lunch In (actual)'] ?? '--'}</td>
+                <td className="px-2 py-1.5 truncate">{row['Break Out 2 (actual)'] ?? '--'}</td>
+                <td className="px-2 py-1.5 truncate">{row['Break In 2 (actual)'] ?? '--'}</td>
+                <td className="px-2 py-1.5 truncate">{row['Time Out (actual)'] ?? '--'}</td>
+                <td className="px-2 py-1.5 truncate text-zinc-400">—</td>
+            </tr>
+        ))
+    )}
+</tbody>
             </table>
+            {/* Pagination bar */}
+<div className="flex items-center justify-between px-3 py-2 border-t border-zinc-100 dark:border-zinc-800 flex-shrink-0">
+    <span className="text-[9px] text-zinc-400">
+        {meta?.total ?? 0} employees &nbsp;·&nbsp; Page {page} of {meta?.last_page ?? 1}
+    </span>
+    <div className="flex items-center gap-1">
+        <button
+            onClick={() => onPageChange(page - 1)}
+            disabled={page <= 1}
+            className="px-2 py-1 text-[9px] rounded border border-zinc-200 dark:border-zinc-700 disabled:opacity-40 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+        >
+            Prev
+        </button>
+        <button
+            onClick={() => onPageChange(page + 1)}
+            disabled={page >= (meta?.last_page ?? 1)}
+            className="px-2 py-1 text-[9px] rounded border border-zinc-200 dark:border-zinc-700 disabled:opacity-40 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+        >
+            Next
+        </button>
+    </div>
+</div>
         </div>
     </div>
 );
 
+            // add usePage
+
 export default function AdminDashboard({ emp_data }) {
+    const { app_name } = usePage().props;                // get app_name from Inertia
+
+const [filters, setFilters] = useState({ company: '', prodline: '', department: '', station: '' });
+const [filterOptions, setFilterOptions] = useState({ companies: [], prodlines: [], departments: [], stations: [] });
+const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().split('T')[0]);
+const [dtrRows, setDtrRows] = useState([]);
+const [dtrPage, setDtrPage] = useState(1);
+const [dtrMeta, setDtrMeta] = useState({ total: 0, last_page: 1, per_page: 15 });
+const [dtrLoading, setDtrLoading] = useState(false);
+const [searchInput, setSearchInput] = useState('');
+const [dtrSearch, setDtrSearch] = useState('');
+
+// Debounce: only fire the search 400ms after the user stops typing
+useEffect(() => {
+    const timer = setTimeout(() => {
+        setDtrSearch(searchInput);
+        setDtrPage(1);
+    }, 400);
+    return () => clearTimeout(timer);
+}, [searchInput]);
+
+// Reset to page 1 whenever filters or date change
+useEffect(() => {
+    setDtrPage(1);
+}, [filters, selectedDate]);
+
+useEffect(() => {
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([k, v]) => { if (v) params.set(k, v); });
+    params.set('page', dtrPage);
+    params.set('date', selectedDate);
+    if (dtrSearch) params.set('search', dtrSearch);
+
+    setDtrLoading(true);
+
+    fetch(`/${app_name}/dashboard/dtr-rows?${params.toString()}`)
+        .then(res => res.json())
+        .then(data => {
+            setDtrRows(data.rows ?? []);
+            setDtrMeta({
+                total:     data.total     ?? 0,
+                last_page: data.last_page ?? 1,
+                per_page:  data.per_page  ?? 15,
+            });
+        })
+        .catch(err => console.error('Failed to fetch DTR rows:', err))
+        .finally(() => setDtrLoading(false));
+}, [filters, dtrPage, dtrSearch, selectedDate]);
+
+    const handleFilterChange = (key, value) => {
+        setFilters(prev => ({ ...prev, [key]: value }));
+    };
+
     return (
-        // This wrapper must be given a fixed height by its parent (e.g. h-screen or h-full)
         <div className="flex flex-col h-full gap-3 p-3 overflow-hidden">
 
-            {/* Top: Overview — flex-[3] gives cells enough height at 768px */}
             <div className="flex flex-col flex-[3] min-h-0 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-sm overflow-hidden">
                 <div className="px-4 py-2 border-b border-zinc-200 dark:border-zinc-700 flex items-center justify-between gap-2 flex-shrink-0 flex-wrap">
                     <h2 className="text-xs font-semibold text-zinc-700 dark:text-zinc-200 whitespace-nowrap">
                         Overview
                     </h2>
                     <div className="flex items-center gap-2 flex-wrap">
-                        <input
-                            type="date"
-                            defaultValue={new Date().toISOString().split("T")[0]}
-                            className="text-[10px] rounded-md border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-zinc-400"
-                        />
-                        {["All Companies","All Prodlines","All Departments","All Stations"].map((label) => (
-                            <select key={label} className="text-[10px] rounded-md border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-zinc-400">
-                                <option>{label}</option>
+<input
+    type="date"
+    value={selectedDate}
+    onChange={(e) => { setSelectedDate(e.target.value); setDtrPage(1); }}
+    className="text-[10px] rounded-md border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-zinc-400"
+/>
+
+                        {/* ✅ Controlled filter dropdowns — populated from DB */}
+                        {[
+                            { key: 'company',    label: 'All Companies',   options: filterOptions.companies   },
+                            { key: 'prodline',   label: 'All Prodlines',   options: filterOptions.prodlines   },
+                            { key: 'department', label: 'All Departments', options: filterOptions.departments },
+                            { key: 'station',    label: 'All Stations',    options: filterOptions.stations    },
+                        ].map(({ key, label, options }) => (
+                            <select
+                                key={key}
+                                value={filters[key]}
+                                onChange={(e) => handleFilterChange(key, e.target.value)}
+                                className="text-[10px] rounded-md border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-zinc-400"
+                            >
+                                <option value="">{label}</option>
+                                {options.map(o => <option key={o} value={o}>{o}</option>)}
                             </select>
                         ))}
                     </div>
                 </div>
 
-                {/* 3-column shift card grid — fills remaining height */}
+                {/* Shift cards — completely unchanged */}
                 <div className="grid grid-cols-3 gap-2 p-2 flex-1 min-h-0">
                     <ShiftCard
                         title="Day Shift"
@@ -300,10 +417,18 @@ export default function AdminDashboard({ emp_data }) {
                 </div>
             </div>
 
-            {/* Bottom: DTR (2/3) + Analytics (1/3) — flex-[4] */}
+            {/* Bottom — completely unchanged */}
             <div className="grid grid-cols-3 gap-3 flex-[4] min-h-0">
                 <div className="col-span-2 min-h-0 flex flex-col">
-                    <DailyTimeRecord />
+<DailyTimeRecord
+    rows={dtrRows}
+    meta={dtrMeta}
+    page={dtrPage}
+    onPageChange={setDtrPage}
+    loading={dtrLoading}
+    searchInput={searchInput}
+    onSearchChange={setSearchInput}
+/>
                 </div>
                 <div className="col-span-1 min-h-0 flex flex-col">
                     <AttendanceAnalytics />
