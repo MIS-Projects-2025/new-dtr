@@ -55,7 +55,7 @@ const ShiftCard = ({ title, cols = 7, headerCells, firstColSpan = 2, restCols = 
 const NS_ROW_LABELS = ["", "Day Shift", "Night Shift", "Total"];
 const NS_COL_HEADERS = ["Present", "%", "Absent", "%"];
 
-const NoScheduleCard = () => (
+const NoScheduleCard = ({ headCount = 0 }) => (
     <div className="flex flex-col rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 overflow-hidden min-h-0">
         <div className="px-3 py-1.5 border-b border-zinc-200 dark:border-zinc-700 flex-shrink-0">
             <h3 className="text-[10px] font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest">
@@ -74,10 +74,10 @@ const NoScheduleCard = () => (
                 className="flex items-center justify-center rounded bg-white dark:bg-zinc-700 border border-zinc-200 dark:border-zinc-600 text-[9px] text-zinc-500 dark:text-zinc-400 overflow-hidden"
                 style={{ gridColumn: "span 6", minHeight: "22px" }}
             >
-                Head Count: 0
+                Head Count: {headCount}
             </div>
 
-            {/* Rows 2–5 */}
+            {/* Rest of the component remains the same */}
             {Array.from({ length: 4 }).map((_, rowIndex) => (
                 <Fragment key={`ns-r${rowIndex}`}>
                     <div
@@ -305,57 +305,99 @@ const DailyTimeRecord = ({ rows = [], meta, page, onPageChange, loading, searchI
     </div>
 );
 
-            // add usePage
-
 export default function AdminDashboard({ emp_data }) {
-    const { app_name } = usePage().props;                // get app_name from Inertia
+    const { app_name } = usePage().props;
 
-const [filters, setFilters] = useState({ company: '', prodline: '', department: '', station: '' });
-const [filterOptions, setFilterOptions] = useState({ companies: [], prodlines: [], departments: [], stations: [] });
-const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().split('T')[0]);
-const [dtrRows, setDtrRows] = useState([]);
-const [dtrPage, setDtrPage] = useState(1);
-const [dtrMeta, setDtrMeta] = useState({ total: 0, last_page: 1, per_page: 15 });
-const [dtrLoading, setDtrLoading] = useState(false);
-const [searchInput, setSearchInput] = useState('');
-const [dtrSearch, setDtrSearch] = useState('');
+    const [filters, setFilters] = useState({ company: '', prodline: '', department: '', station: '' });
+    const [filterOptions, setFilterOptions] = useState({ companies: [], prodlines: [], departments: [], stations: [] });
+    const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().split('T')[0]);
+    const [dtrRows, setDtrRows] = useState([]);
+    const [dtrPage, setDtrPage] = useState(1);
+    const [dtrMeta, setDtrMeta] = useState({ total: 0, last_page: 1, per_page: 15 });
+    const [dtrLoading, setDtrLoading] = useState(false);
+    const [searchInput, setSearchInput] = useState('');
+    const [dtrSearch, setDtrSearch] = useState('');
+    const [shiftCounts, setShiftCounts] = useState({
+        day_shift: 0,
+        night_shift: 0,
+        no_schedule: 0
+    });
+    const [countsLoading, setCountsLoading] = useState(false);
 
-// Debounce: only fire the search 400ms after the user stops typing
-useEffect(() => {
-    const timer = setTimeout(() => {
-        setDtrSearch(searchInput);
+    // Fetch filter options when component mounts
+    useEffect(() => {
+        fetch(`/${app_name}/dashboard/filtered-employees`)
+            .then(res => res.json())
+            .then(data => {
+                if (data.filters) {
+                    setFilterOptions({
+                        companies: data.filters.companies || [],
+                        prodlines: data.filters.prodlines || [],
+                        departments: data.filters.departments || [],
+                        stations: data.filters.stations || []
+                    });
+                }
+            })
+            .catch(err => console.error('Failed to fetch filter options:', err));
+    }, []);
+
+    // Add effect to fetch shift counts when filters or date change
+    useEffect(() => {
+        const params = new URLSearchParams();
+        Object.entries(filters).forEach(([k, v]) => { if (v) params.set(k, v); });
+        params.set('date', selectedDate);
+        
+        setCountsLoading(true);
+        
+        fetch(`/${app_name}/dashboard/shift-counts?${params.toString()}`)
+            .then(res => res.json())
+            .then(data => {
+                setShiftCounts({
+                    day_shift: data.day_shift ?? 0,
+                    night_shift: data.night_shift ?? 0,
+                    no_schedule: data.no_schedule ?? 0
+                });
+            })
+            .catch(err => console.error('Failed to fetch shift counts:', err))
+            .finally(() => setCountsLoading(false));
+    }, [filters, selectedDate]);
+
+    // Debounce: only fire the search 400ms after the user stops typing
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            setDtrSearch(searchInput);
+            setDtrPage(1);
+        }, 400);
+        return () => clearTimeout(timer);
+    }, [searchInput]);
+
+    // Reset to page 1 whenever filters or date change
+    useEffect(() => {
         setDtrPage(1);
-    }, 400);
-    return () => clearTimeout(timer);
-}, [searchInput]);
+    }, [filters, selectedDate]);
 
-// Reset to page 1 whenever filters or date change
-useEffect(() => {
-    setDtrPage(1);
-}, [filters, selectedDate]);
+    useEffect(() => {
+        const params = new URLSearchParams();
+        Object.entries(filters).forEach(([k, v]) => { if (v) params.set(k, v); });
+        params.set('page', dtrPage);
+        params.set('date', selectedDate);
+        if (dtrSearch) params.set('search', dtrSearch);
 
-useEffect(() => {
-    const params = new URLSearchParams();
-    Object.entries(filters).forEach(([k, v]) => { if (v) params.set(k, v); });
-    params.set('page', dtrPage);
-    params.set('date', selectedDate);
-    if (dtrSearch) params.set('search', dtrSearch);
+        setDtrLoading(true);
 
-    setDtrLoading(true);
-
-    fetch(`/${app_name}/dashboard/dtr-rows?${params.toString()}`)
-        .then(res => res.json())
-        .then(data => {
-            setDtrRows(data.rows ?? []);
-            setDtrMeta({
-                total:     data.total     ?? 0,
-                last_page: data.last_page ?? 1,
-                per_page:  data.per_page  ?? 15,
-            });
-        })
-        .catch(err => console.error('Failed to fetch DTR rows:', err))
-        .finally(() => setDtrLoading(false));
-}, [filters, dtrPage, dtrSearch, selectedDate]);
+        fetch(`/${app_name}/dashboard/dtr-rows?${params.toString()}`)
+            .then(res => res.json())
+            .then(data => {
+                setDtrRows(data.rows ?? []);
+                setDtrMeta({
+                    total:     data.total     ?? 0,
+                    last_page: data.last_page ?? 1,
+                    per_page:  data.per_page  ?? 15,
+                });
+            })
+            .catch(err => console.error('Failed to fetch DTR rows:', err))
+            .finally(() => setDtrLoading(false));
+    }, [filters, dtrPage, dtrSearch, selectedDate]);
 
     const handleFilterChange = (key, value) => {
         setFilters(prev => ({ ...prev, [key]: value }));
@@ -363,21 +405,19 @@ useEffect(() => {
 
     return (
         <div className="flex flex-col h-full gap-3 p-3 overflow-hidden">
-
             <div className="flex flex-col flex-[3] min-h-0 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-sm overflow-hidden">
                 <div className="px-4 py-2 border-b border-zinc-200 dark:border-zinc-700 flex items-center justify-between gap-2 flex-shrink-0 flex-wrap">
                     <h2 className="text-xs font-semibold text-zinc-700 dark:text-zinc-200 whitespace-nowrap">
                         Overview
                     </h2>
                     <div className="flex items-center gap-2 flex-wrap">
-<input
-    type="date"
-    value={selectedDate}
-    onChange={(e) => { setSelectedDate(e.target.value); setDtrPage(1); }}
-    className="text-[10px] rounded-md border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-zinc-400"
-/>
+                        <input
+                            type="date"
+                            value={selectedDate}
+                            onChange={(e) => { setSelectedDate(e.target.value); setDtrPage(1); }}
+                            className="text-[10px] rounded-md border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-zinc-400"
+                        />
 
-                        {/* ✅ Controlled filter dropdowns — populated from DB */}
                         {[
                             { key: 'company',    label: 'All Companies',   options: filterOptions.companies   },
                             { key: 'prodline',   label: 'All Prodlines',   options: filterOptions.prodlines   },
@@ -397,44 +437,43 @@ useEffect(() => {
                     </div>
                 </div>
 
-                {/* Shift cards — completely unchanged */}
+                {/* Shift cards with dynamic counts */}
                 <div className="grid grid-cols-3 gap-2 p-2 flex-1 min-h-0">
                     <ShiftCard
                         title="Day Shift"
                         cols={7}
-                        headerCells={[["3","Header Count: 0"],["4","On Rest Day: 0"]]}
+                        headerCells={[["3", `Head Count: ${shiftCounts.day_shift}`], ["4", "On Rest Day: 0"]]}
                         firstColSpan={2}
                         restCols={5}
                     />
                     <ShiftCard
                         title="Night Shift"
                         cols={7}
-                        headerCells={[["3","Header Count: 0"],["4","On Rest Day: 0"]]}
+                        headerCells={[["3", `Head Count: ${shiftCounts.night_shift}`], ["4", "On Rest Day: 0"]]}
                         firstColSpan={2}
                         restCols={5}
                     />
-                    <NoScheduleCard />
+                    <NoScheduleCard headCount={shiftCounts.no_schedule} />
                 </div>
             </div>
 
-            {/* Bottom — completely unchanged */}
+            {/* Bottom section */}
             <div className="grid grid-cols-3 gap-3 flex-[4] min-h-0">
                 <div className="col-span-2 min-h-0 flex flex-col">
-<DailyTimeRecord
-    rows={dtrRows}
-    meta={dtrMeta}
-    page={dtrPage}
-    onPageChange={setDtrPage}
-    loading={dtrLoading}
-    searchInput={searchInput}
-    onSearchChange={setSearchInput}
-/>
+                    <DailyTimeRecord
+                        rows={dtrRows}
+                        meta={dtrMeta}
+                        page={dtrPage}
+                        onPageChange={setDtrPage}
+                        loading={dtrLoading}
+                        searchInput={searchInput}
+                        onSearchChange={setSearchInput}
+                    />
                 </div>
                 <div className="col-span-1 min-h-0 flex flex-col">
                     <AttendanceAnalytics />
                 </div>
             </div>
-
         </div>
     );
 }

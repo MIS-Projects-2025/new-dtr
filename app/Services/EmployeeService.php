@@ -604,8 +604,8 @@ public function getDtrRows(array $filters = [], int $page = 1, int $perPage = 15
     $today       = !empty($date) ? $date : now()->toDateString();
     $todayCarbon = \Carbon\Carbon::parse($today);
 
-    $total     = $this->employeeRepo->countFilteredEmployees($filters, $positions, $search);
-    $employees = $this->employeeRepo->getFilteredEmployees($filters, $positions, $perPage, $page, $search);
+    $total     = $this->employeeRepo->countFilteredEmployees($filters, $positions, $search, $today);
+    $employees = $this->employeeRepo->getFilteredEmployees($filters, $positions, $perPage, $page, $search, $today);
     $employIds = $employees->pluck('EMPLOYID')->toArray();
     
     // Get active schedules - employees without schedules will not be in this collection
@@ -770,6 +770,98 @@ public function getDtrRows(array $filters = [], int $page = 1, int $perPage = 15
         'per_page'     => $perPage,
         'current_page' => $page,
         'last_page'    => (int) ceil($total / $perPage),
+    ];
+}
+
+/**
+ * Get counts for Day Shift, Night Shift, and No Schedule employees
+ * 
+ * @param array $filters
+ * @param string $date
+ * @return array
+ */
+public function getShiftCounts(array $filters = [], string $date = ''): array
+{
+    $positions = [1, 2];
+    $today = !empty($date) ? $date : now()->toDateString();
+    $todayCarbon = \Carbon\Carbon::parse($today);
+    
+    // Get all employees matching the criteria (no pagination)
+    $employees = $this->employeeRepo->getFilteredEmployees($filters, $positions, 9999, 1, '', $today);
+    $employIds = $employees->pluck('EMPLOYID')->toArray();
+    
+    // Get active schedules for these employees
+    $activeSchedules = $this->employeeRepo->getActiveSchedules($employIds, $today)->keyBy('EMPID');
+    
+    $dayShiftCount = 0;
+    $nightShiftCount = 0;
+    $noScheduleCount = 0;
+    
+    foreach ($employees as $employee) {
+        $employId = $employee->EMPLOYID;
+        $activeSchedule = $activeSchedules->get($employId);
+        
+        if (!$activeSchedule) {
+            // No schedule found
+            $noScheduleCount++;
+            continue;
+        }
+        
+        // Get the shift for today
+        $schedule = $activeSchedule->SCHEDULE ?? [];
+        $payrollStart = $activeSchedule->PAYROLL_DATE_START;
+        $shiftCodesMap = $activeSchedule->shift_codes_map ?? collect();
+        
+        $shiftType = null;
+        
+        if ($payrollStart) {
+            $payrollStartDate = \Carbon\Carbon::parse($payrollStart)->startOfDay();
+            $dayIndex = (int) $payrollStartDate->diffInDays($todayCarbon) + 1;
+            $shiftId = $schedule[(string) $dayIndex] ?? $schedule[$dayIndex] ?? null;
+            
+            if ($shiftId) {
+                $shiftCode = $shiftCodesMap->get((int) $shiftId);
+                if ($shiftCode) {
+                    // Determine shift type based on time windows
+                    $timeWindows = $shiftCode->TIME_WINDOWS;
+                    if (is_string($timeWindows)) {
+                        $timeWindows = json_decode($timeWindows, true);
+                    }
+                    
+                    $firstTime = $timeWindows[0] ?? null;
+                    if ($firstTime) {
+                        $hour = (int) explode(':', $firstTime)[0];
+                        // Night shift: starts at 18:00 (6 PM) or later, or before 6 AM
+                        if ($hour >= 18 || $hour < 6) {
+                            $nightShiftCount++;
+                        } else {
+                            $dayShiftCount++;
+                        }
+                    } else {
+                        // Fallback: check shift code name
+                        $shiftCodeName = $shiftCode->SHIFTCODE ?? '';
+                        if (str_contains(strtoupper($shiftCodeName), 'NS')) {
+                            $nightShiftCount++;
+                        } else {
+                            $dayShiftCount++;
+                        }
+                    }
+                } else {
+                    $dayShiftCount++; // Default to day shift if no shift code found
+                }
+            } else {
+                $dayShiftCount++; // Default to day shift if no shift ID found
+            }
+        } else {
+            $dayShiftCount++; // Default to day shift if no payroll start date
+        }
+    }
+    
+    return [
+        'day_shift' => $dayShiftCount,
+        'night_shift' => $nightShiftCount,
+        'no_schedule' => $noScheduleCount,
+        'total' => $employees->count(),
     ];
 }
 

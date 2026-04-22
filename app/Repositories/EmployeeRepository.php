@@ -30,20 +30,48 @@ public function getFilteredEmployees(
     array  $positions = [1, 2],
     int    $perPage   = 15,
     int    $page      = 1,
-    string $search    = ''
+    string $search    = '',
+    string $date      = null  // Add date parameter for DATEHIRED check
 ): Collection {
-    return EmployeeMasterlist::where('ACCSTATUS', 1)
+    $query = EmployeeMasterlist::where('ACCSTATUS', 1)
         ->whereIn('EMPPOSITION', $positions)
-        ->when(!empty($filters['company']),    fn($q) => $q->where('COMPANY',    $filters['company']))
-        ->when(!empty($filters['prodline']),   fn($q) => $q->where('PRODLINE',   $filters['prodline']))
-        ->when(!empty($filters['department']), fn($q) => $q->where('DEPARTMENT', $filters['department']))
-        ->when(!empty($filters['station']),    fn($q) => $q->where('STATION',    $filters['station']))
-        ->when(!empty($search), fn($q) => $q->where(function ($q) use ($search) {
-            $q->where('EMPNAME',  'like', "%{$search}%")
+        ->whereNotNull('PRODLINE')
+        ->where('PRODLINE', '!=', '')
+        ->where('PRODLINE', '!=', 'Security')
+        ->where('BIOMETRIC_STATUS', 'Enabled');
+    
+    // Add DATEHIRED condition
+    if ($date) {
+        $query->where(function($q) use ($date) {
+            $q->whereNull('DATEHIRED')
+              ->orWhere('DATEHIRED', '<=', $date);
+        });
+    }
+    
+    // Apply filters
+    if (!empty($filters['company'])) {
+        $query->where('COMPANY', $filters['company']);
+    }
+    if (!empty($filters['prodline'])) {
+        $query->where('PRODLINE', $filters['prodline']);
+    }
+    if (!empty($filters['department'])) {
+        $query->where('DEPARTMENT', $filters['department']);
+    }
+    if (!empty($filters['station'])) {
+        $query->where('STATION', $filters['station']);
+    }
+    
+    // Apply search
+    if (!empty($search)) {
+        $query->where(function ($q) use ($search) {
+            $q->where('EMPNAME', 'like', "%{$search}%")
               ->orWhere('EMPLOYID', 'like', "%{$search}%");
-        }))
-        ->select(['EMPLOYID', 'EMPNAME', 'JOB_TITLE', 'DEPARTMENT',
-                'EMPPOSITION', 'PRODLINE', 'COMPANY', 'STATION'])
+        });
+    }
+    
+    return $query->select(['EMPLOYID', 'EMPNAME', 'JOB_TITLE', 'DEPARTMENT',
+            'EMPPOSITION', 'PRODLINE', 'COMPANY', 'STATION', 'DATEHIRED'])
         ->forPage($page, $perPage)
         ->get();
 }
@@ -51,19 +79,47 @@ public function getFilteredEmployees(
 public function countFilteredEmployees(
     array  $filters   = [],
     array  $positions = [1, 2],
-    string $search    = ''
+    string $search    = '',
+    string $date      = null  // Add date parameter
 ): int {
-    return EmployeeMasterlist::where('ACCSTATUS', 1)
+    $query = EmployeeMasterlist::where('ACCSTATUS', 1)
         ->whereIn('EMPPOSITION', $positions)
-        ->when(!empty($filters['company']),    fn($q) => $q->where('COMPANY',    $filters['company']))
-        ->when(!empty($filters['prodline']),   fn($q) => $q->where('PRODLINE',   $filters['prodline']))
-        ->when(!empty($filters['department']), fn($q) => $q->where('DEPARTMENT', $filters['department']))
-        ->when(!empty($filters['station']),    fn($q) => $q->where('STATION',    $filters['station']))
-        ->when(!empty($search), fn($q) => $q->where(function ($q) use ($search) {
-            $q->where('EMPNAME',  'like', "%{$search}%")
+        ->whereNotNull('PRODLINE')
+        ->where('PRODLINE', '!=', '')
+        ->where('PRODLINE', '!=', 'Security')
+        ->where('BIOMETRIC_STATUS', 'Enabled');
+    
+    // Add DATEHIRED condition
+    if ($date) {
+        $query->where(function($q) use ($date) {
+            $q->whereNull('DATEHIRED')
+              ->orWhere('DATEHIRED', '<=', $date);
+        });
+    }
+    
+    // Apply filters
+    if (!empty($filters['company'])) {
+        $query->where('COMPANY', $filters['company']);
+    }
+    if (!empty($filters['prodline'])) {
+        $query->where('PRODLINE', $filters['prodline']);
+    }
+    if (!empty($filters['department'])) {
+        $query->where('DEPARTMENT', $filters['department']);
+    }
+    if (!empty($filters['station'])) {
+        $query->where('STATION', $filters['station']);
+    }
+    
+    // Apply search
+    if (!empty($search)) {
+        $query->where(function ($q) use ($search) {
+            $q->where('EMPNAME', 'like', "%{$search}%")
               ->orWhere('EMPLOYID', 'like', "%{$search}%");
-        }))
-        ->count();
+        });
+    }
+    
+    return $query->count();
 }
 
     public function getFilterOptions(array $positions = [1, 2]): array

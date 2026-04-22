@@ -14,9 +14,7 @@ Route::prefix($app_name)->middleware(AuthMiddleware::class)->group(function () {
     Route::get('/dashboard/shift-logs', [DashboardController::class, 'getShiftLogs']);
     Route::get('/dashboard/attendance-counter', [DashboardController::class, 'getAttendanceCounter']);
     Route::get('/dashboard/management-presence', [DashboardController::class, 'getManagementPresence']);
-    Route::get('/dashboard/employees/filtered',   [DashboardController::class, 'getFilteredEmployees']);
+    Route::get('/dashboard/employees/filtered', [DashboardController::class, 'getFilteredEmployees']);
     Route::get('/dashboard/dtr-rows', [DashboardController::class, 'getDtrRows']);
-
-
+    Route::get('/dashboard/shift-counts', [DashboardController::class, 'getShiftCounts']); // Fixed: removed duplicate /dashboard
 });
- 

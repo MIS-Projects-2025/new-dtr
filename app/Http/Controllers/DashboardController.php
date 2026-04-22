@@ -161,4 +161,20 @@ public function getDtrRows(Request $request)
         return response()->json(['error' => $e->getMessage()], 500);
     }
 }
+
+public function getShiftCounts(Request $request)
+{
+    try {
+        $filters = $request->only(['company', 'prodline', 'department', 'station']);
+        $date = $request->get('date', now()->toDateString());
+        
+        $counts = $this->employeeService->getShiftCounts($filters, $date);
+        
+        return response()->json($counts);
+    } catch (\Exception $e) {
+        \Log::error('Shift counts error: ' . $e->getMessage());
+        return response()->json(['error' => $e->getMessage()], 500);
+    }
+}
+
 }
