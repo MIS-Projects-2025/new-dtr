@@ -167,4 +167,30 @@ public function getActiveSchedules(array $employIds, string $date = ''): Collect
 
     return $schedules;
 }
+
+public function getApprovedLeaves(array $employIds, string $date): Collection
+{
+    return \App\Models\EmployeeLeave::whereIn('EMPLOYID', $employIds)
+        ->where('LEAVESTATUS', 'approved')
+        ->whereDate('DATESTART', '<=', $date)
+        ->whereDate('DATEEND',   '>=', $date)
+        ->get(['EMPLOYID'])
+        ->keyBy('EMPLOYID');
 }
+
+public function getApprovedObs(array $employIds, string $date): Collection
+{
+    return \App\Models\ObRecord::whereIn('EMPID', $employIds)
+        ->whereIn('STATUS', [1, 2])
+        ->whereDate('DATE_OB_FROM', '<=', $date)
+        ->whereDate('DATE_OB_TO',   '>=', $date)
+        ->get(['EMPID', 'TIME_FROM', 'TIME_TO', 'FORM_TYPE'])
+        ->map(function ($ob) {
+            $ob->TIME_FROM = $ob->TIME_FROM ? substr($ob->TIME_FROM, 0, 5) : null;
+            $ob->TIME_TO   = $ob->TIME_TO   ? substr($ob->TIME_TO,   0, 5) : null;
+            return $ob;
+        })
+        ->keyBy(fn($ob) => (string) $ob->EMPID); // force string key
+}
+}
+

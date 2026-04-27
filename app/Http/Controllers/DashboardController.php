@@ -149,11 +149,13 @@ class DashboardController extends Controller
 public function getDtrRows(Request $request)
 {
     try {
-        $filters = $request->only(['company', 'prodline', 'department', 'station']);
-        $page    = (int) $request->get('page', 1);
-        $search  = (string) $request->get('search', '');
-        $date    = $request->get('date', now()->toDateString());
-        $result  = $this->employeeService->getDtrRows($filters, $page, 15, $search, $date);
+        $filters      = $request->only(['company', 'prodline', 'department', 'station']);
+        $page         = (int) $request->get('page', 1);
+        $search       = (string) $request->get('search', '');
+        $date         = $request->get('date', now()->toDateString());
+        $shiftFilter  = (string) $request->get('shift_filter', '');
+        $statusFilter = (string) $request->get('status_filter', '');
+        $result       = $this->employeeService->getDtrRows($filters, $page, 15, $search, $date, $shiftFilter, $statusFilter);
 
         return response()->json($result);
     } catch (\Exception $e) {
@@ -177,4 +179,77 @@ public function getShiftCounts(Request $request)
     }
 }
 
+public function getUnscheduledEmployees(Request $request)
+{
+    try {
+        $filters = $request->only(['company', 'prodline', 'department', 'station']);
+        $date = $request->get('date', now()->toDateString());
+        
+        $employees = $this->employeeService->getUnscheduledEmployees($filters, $date);
+        
+        return response()->json(['employees' => $employees]);
+    } catch (\Exception $e) {
+        \Log::error('Unscheduled employees error: ' . $e->getMessage());
+        return response()->json(['error' => $e->getMessage(), 'employees' => []], 500);
+    }
+}
+
+    public function getEmployeeShiftLogs(Request $request)
+    {
+        try {
+            $employId = $request->get('employ_id');
+            $date = $request->get('date', now()->toDateString());
+            
+            if (!$employId) {
+                return response()->json(['error' => 'employ_id required'], 400);
+            }
+            
+            $logs = $this->employeeService->getEmployeeShiftLogsForDate($employId, $date);
+            
+            return response()->json($logs);
+        } catch (\Exception $e) {
+            \Log::error('Employee shift logs error: ' . $e->getMessage());
+            return response()->json(['error' => $e->getMessage()], 500);
+        }
+    }
+    
+    public function getOverviewData(Request $request)
+        {
+            try {
+                $filters      = $request->only(['company', 'prodline', 'department', 'station']);
+                $date         = $request->get('date', now()->toDateString());
+                $page         = (int) $request->get('page', 1);
+                $search       = (string) $request->get('search', '');
+                $shiftFilter  = (string) $request->get('shift_filter', '');
+                $statusFilter = (string) $request->get('status_filter', '');
+
+                $result = $this->employeeService->getOverviewData(
+                    $filters, $date, $page, 15, $search, $shiftFilter, $statusFilter
+                );
+
+                return response()->json($result);
+            } catch (\Exception $e) {
+                \Log::error('Overview data error: ' . $e->getMessage());
+                return response()->json(['error' => $e->getMessage()], 500);
+            }
+        }
+
+    public function getAnalyticsStats(Request $request)
+        {
+            try {
+                $filters = $request->only(['company', 'prodline', 'department', 'station']);
+                $mode    = $request->get('mode', 'Daily');
+                $date    = $request->get('date', now()->toDateString());
+                $cutoff  = $request->get('cutoff') ?? '';   // ← was: get('cutoff', '')
+                $month   = $request->get('month')  ?? '';   // ← was: get('month', now()->format('Y-m'))
+
+                $result = $this->employeeService->getAnalyticsStats($filters, $mode, $date, $cutoff, $month);
+
+                return response()->json($result);
+            } catch (\Throwable $e) {
+                \Log::error('Analytics stats error: ' . $e->getMessage()
+                    . ' in ' . $e->getFile() . ':' . $e->getLine());
+                return response()->json(['error' => $e->getMessage()], 500);
+            }
+        }
 }

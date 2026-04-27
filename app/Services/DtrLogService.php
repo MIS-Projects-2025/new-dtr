@@ -2,22 +2,47 @@
 
 namespace App\Services;
 
-use App\Models\AttendanceLog;
 use App\Models\BiometricLog;
 use App\Models\BiometricLogManual;
-use App\Models\VPLog;
 use Carbon\Carbon;
+use Illuminate\Support\Collection;
 
 class DtrLogService
 {
+    // -------------------------------------------------------------------------
+    // PUBLIC API
+    // -------------------------------------------------------------------------
+
     /**
-     * Resolve today's actual logs for a batch of employees in one go.
-     * Returns a keyed array: [ employid => resolved_slots ]
+     * Resolve actual DTR logs for a batch of employees.
      *
-     * @param  array  $employIds   List of EMPLOYID strings
+     * Returns: [ employid => resolved_slots ]
+     *
+     * Slot index → name:
+     *   0 → time_in       1 → break_out_1   2 → break_in_1
+     *   3 → lunch_out     4 → lunch_in       5 → break_out_2
+     *   6 → break_in_2    7 → time_out
+     *
+     * Handled scenarios:
+     *   1.  Normal day shift, all punches typed correctly
+     *   2.  Close TIME_WINDOWS (slots only minutes apart)
+     *   3.  Employee skipped a break entirely
+     *   4.  Generic device (only check_in / check_out punch types)
+     *   5.  Missing time_in (forgot to tap in)
+     *   6.  Missing time_out (forgot to tap out)
+     *   7.  Night shift spanning midnight
+     *   8.  Night shift whose check_in fell on a previous rest day
+     *   9.  Shifting schedule (no break_out_1 / break_in_1 slots)
+     *   10. Duplicate taps within 3 minutes
+     *   11. On-leave / unscheduled employee who still punched in
+     *   12. Employee with no schedule at all
+     *   13. Orphaned break_in with no matching break_out
+     *   14. Extra punches beyond the expected number of slots
+     *
+     * @param  array  $employIds       List of EMPLOYID strings
      * @param  array  $timeWindowsMap  [ employid => TIME_WINDOWS array ]
      * @param  array  $scheduleTypeMap [ employid => 'Normal' | 'Shifting' ]
-     * @param  string $date        The date to fetch logs for (Y-m-d)
+     * @param  string $date            Target date (Y-m-d), defaults to today
      * @return array
      */
     public function resolveLogsForEmployees(
@@ -26,618 +51,960 @@ class DtrLogService
         array  $scheduleTypeMap,
         string $date = ''
     ): array {
-        $today     = !empty($date) ? $date : now()->toDateString();
-        $tomorrow  = Carbon::parse($today)->addDay()->toDateString();
-        $yesterday = Carbon::parse($today)->subDay()->toDateString();
+        if (empty($employIds)) return [];
 
-        // ── Determine which employees are on night shift ──────────────────────
-        $nightShiftIds = [];
-        $dayShiftIds   = [];
+        $today = !empty($date) ? $date : now()->toDateString();
 
-        foreach ($employIds as $employId) {
-            $tw        = $timeWindowsMap[$employId] ?? [];
-            $firstTime = $tw[0] ?? null;
-            $isNight   = false;
+        // Fetch a wide window (yesterday → day after tomorrow) so night-shift
+        // boundaries and late check-outs are never cut off.
+        $from = Carbon::parse($today)->subDay()->toDateString();
+        $to   = Carbon::parse($today)->addDays(2)->toDateString();
 
-            if ($firstTime) {
-                $firstHour = (int) explode(':', $firstTime)[0];
-                // Night shift if start time is between 18:00-23:59
-                $isNight = $firstHour >= 18;
-            }
+        $allLogs = $this->fetchAllLogs($employIds, $from, $to);
 
-            if ($isNight) {
-                $nightShiftIds[] = $employId;
-            } else {
-                $dayShiftIds[] = $employId;
-            }
-        }
-
-        // ── Fetch logs from biometric tables ───────────────────────────────────
-        $allBioLogs = $this->fetchBiometricLogs($employIds, $today, $tomorrow, $yesterday);
-        
-        // ── Group logs by employee ─────────────────────────────────────────────
-        $logsByEmployee = [];
-        foreach ($allBioLogs as $log) {
-            $empId = $log['employid'];
-            if (!isset($logsByEmployee[$empId])) {
-                $logsByEmployee[$empId] = [];
-            }
-            $logsByEmployee[$empId][] = $log;
-        }
-
-        // ── Resolve per employee ──────────────────────────────────────────────
         $result = [];
 
         foreach ($employIds as $employId) {
-            $tw           = $timeWindowsMap[$employId] ?? [];
+            $tw           = $timeWindowsMap[$employId]  ?? [];
             $scheduleType = $scheduleTypeMap[$employId] ?? 'Normal';
             $isShifting   = $scheduleType === 'Shifting';
-            
-            // Get logs for this employee
-            $employeeLogs = $logsByEmployee[$employId] ?? [];
-            
-            // Determine if this is a night shift
-            $firstTime = $tw[0] ?? null;
-            $isNightShift = false;
-            if ($firstTime) {
-                $firstHour = (int) explode(':', $firstTime)[0];
-                $isNightShift = $firstHour >= 18;
+            $isNightShift = $this->isNightShift($tw);
+
+            $empLogs = $allLogs[$employId] ?? [];
+
+            // For no-schedule employees (empty tw), detect night shift from
+            // ANY punch type — not just check_in — so missed check-ins don't
+            // cause the employee to fall into the wrong date window.
+            if (!$isNightShift && empty($tw)) {
+                $isNightShift = $this->detectNightShiftFromLogs($empLogs, $today);
             }
-            
-            // Get logs for the date (handles night shift boundary)
-            $logsForDate = $this->getLogsForDate($today, $isNightShift, $employeeLogs);
-            
-            // Deduplicate logs (keep within 5 minutes)
+
+            $logsForDate = $this->filterLogsForDate($empLogs, $today, $isNightShift, $tw);
             $logsForDate = $this->deduplicateLogs($logsForDate, $isNightShift);
-            
-            // Suppress orphan stray punches (no check_in AND no check_out)
-            $hasCI = false;
-            $hasCO = false;
-            foreach ($logsForDate as $log) {
-                $type = strtolower($log['type']);
-                if (str_contains($type, 'check_in')) $hasCI = true;
-                if (str_contains($type, 'check_out')) $hasCO = true;
-            }
-            if (!$hasCI && !$hasCO && !empty($logsForDate)) {
-                $logsForDate = [];
-            }
-            
-            // Assign punches to slots
-            $empShiftType = $scheduleType === 'Shifting' ? 2 : 1;
-            $assigned = $this->assignPunches($tw, $logsForDate, $isNightShift, $empShiftType);
-            
-            // Build result slots
-            $slots = $this->emptySlots();
-            $slots['time_in'] = $assigned[0] ?? null;
-            $slots['break_out_1'] = $assigned[1] ?? null;
-            $slots['break_in_1'] = $assigned[2] ?? null;
-            $slots['lunch_out'] = $assigned[3] ?? null;
-            $slots['lunch_in'] = $assigned[4] ?? null;
-            $slots['break_out_2'] = $assigned[5] ?? null;
-            $slots['break_in_2'] = $assigned[6] ?? null;
-            $slots['time_out'] = $assigned[7] ?? null;
-            
-            // Null out disabled slots for Shifting schedule (skip break 1)
-            if ($isShifting) {
-                $slots['break_out_1'] = null;
-                $slots['break_in_1'] = null;
-            }
-            
-            $result[$employId] = $slots;
+
+            $result[$employId] = $this->assignPunches($tw, $logsForDate, $isNightShift, $isShifting);
         }
 
         return $result;
     }
-    
-    /**
-     * Fetch biometric logs for employees from both automatic and manual tables
+
+        /**
+     * Same as resolveLogsForEmployees but accepts pre-fetched raw logs
+     * grouped by employid to avoid repeated DB queries across date ranges.
      */
-    private function fetchBiometricLogs(array $employIds, string $today, string $tomorrow, string $yesterday): array
-    {
+    public function resolveLogsForEmployeesFromRaw(
+    array      $employIds,
+    array      $timeWindowsMap,
+    array      $scheduleTypeMap,
+    string     $date,
+    Collection $allBioLogs,
+    Collection $allManualLogs
+): array {
+    if (empty($employIds)) return [];
+
+    // Wide window needed for night shift boundary detection
+    $from = Carbon::parse($date)->subDay()->toDateString();
+    $to   = Carbon::parse($date)->addDays(2)->toDateString();
+
+    // Build per-employee log arrays from the pre-fetched bulk collections
+    $grouped = [];
+
+    foreach ($employIds as $employId) {
+        $key = (string) $employId;
         $logs = [];
-        
-        // For night shifts, we need logs from yesterday through tomorrow
-        // For day shifts, just today is enough
-        $startDate = $yesterday;
-        $endDate = $tomorrow;
-        
-        // Query automatic biometric logs
-        $autoLogs = BiometricLog::whereIn('employid', $employIds)
-            ->whereBetween('datetime', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
-            ->orderBy('datetime', 'asc')
-            ->get(['employid', 'datetime', 'punch_type']);
-            
-        foreach ($autoLogs as $log) {
-            $datetime = Carbon::parse($log->datetime);
+
+        foreach ($allBioLogs->get($key, collect()) as $row) {
+            $logDate = substr($row->datetime, 0, 10);
+            if ($logDate < $from || $logDate > $to) continue;
+            $dt    = Carbon::parse($row->datetime);
             $logs[] = [
-                'employid' => $log->employid,
-                'datetime' => $log->datetime,
-                'date' => $datetime->toDateString(),
-                'time' => $datetime->format('H:i'),
-                'type' => $this->mapPunchType($log->punch_type),
-                'source' => 'automatic',
+                'employid' => $key,
+                'datetime' => $row->datetime,
+                'date'     => $dt->toDateString(),
+                'time'     => $dt->format('H:i'),
+                'type'     => $this->mapPunchType($row->punch_type),
+                'source'   => 'auto',
             ];
         }
-        
-        // Query manual biometric logs
-        $manualLogs = BiometricLogManual::whereIn('employid', $employIds)
-            ->whereBetween('datetime', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
-            ->orderBy('datetime', 'asc')
-            ->get(['employid', 'datetime', 'punch_type']);
-            
-        foreach ($manualLogs as $log) {
-            $datetime = Carbon::parse($log->datetime);
+
+        foreach ($allManualLogs->get($key, collect()) as $row) {
+            $logDate = substr($row->datetime, 0, 10);
+            if ($logDate < $from || $logDate > $to) continue;
+            $dt    = Carbon::parse($row->datetime);
             $logs[] = [
-                'employid' => $log->employid,
-                'datetime' => $log->datetime,
-                'date' => $datetime->toDateString(),
-                'time' => $datetime->format('H:i'),
-                'type' => $this->mapPunchType($log->punch_type),
-                'source' => 'manual',
+                'employid' => $key,
+                'datetime' => $row->datetime,
+                'date'     => $dt->toDateString(),
+                'time'     => $dt->format('H:i'),
+                'type'     => $this->mapPunchType($row->punch_type),
+                'source'   => 'manual',
             ];
         }
-        
-        // Sort by datetime
-        usort($logs, function($a, $b) {
-            return strtotime($a['datetime']) - strtotime($b['datetime']);
-        });
-        
-        return $logs;
+
+        if (!empty($logs)) {
+            usort($logs, fn($a, $b) => strcmp($a['datetime'], $b['datetime']));
+        }
+
+        $grouped[$key] = $logs;
     }
-    
-    /**
-     * Map punch type from database to standard type
-     */
-    private function mapPunchType($punchType): string
-    {
-        $mapping = [
-            '0' => 'check_in',
-            '1' => 'check_out',
-            '2' => 'break_out',
-            '3' => 'break_in',
-            '4' => 'lunch_out',
-            '5' => 'lunch_in',
-        ];
-        
-        $type = strtolower($punchType);
-        return $mapping[$type] ?? $type;
+
+    $result = [];
+
+    foreach ($employIds as $employId) {
+        $key          = (string) $employId;
+        $tw           = $timeWindowsMap[$employId]  ?? [];
+        $scheduleType = $scheduleTypeMap[$employId] ?? 'Normal';
+        $isShifting   = $scheduleType === 'Shifting';
+        $isNightShift = $this->isNightShift($tw);
+        $empLogs      = $grouped[$key] ?? [];
+
+        if (!$isNightShift && empty($tw)) {
+            $isNightShift = $this->detectNightShiftFromLogs($empLogs, $date);
+        }
+
+        $logsForDate = $this->filterLogsForDate($empLogs, $date, $isNightShift, $tw);
+        $logsForDate = $this->deduplicateLogs($logsForDate, $isNightShift);
+
+        $result[$employId] = $this->assignPunches($tw, $logsForDate, $isNightShift, $isShifting);
     }
-    
-    /**
-     * Get logs for a specific date, handling night shift boundary
-     */
-    private function getLogsForDate(string $date, bool $isNightShift, array $logs): array
-    {
-        $result = [];
-        
-        if ($isNightShift) {
-            $nextDate = date('Y-m-d', strtotime($date . ' +1 day'));
-            
-            // Get logs from current date (after 12:00)
-            foreach ($logs as $log) {
-                if ($log['date'] === $date) {
-                    $hour = (int) date('H', strtotime($log['time']));
-                    if ($hour >= 12) {
-                        $result[] = $log;
-                    }
-                }
+
+    return $result;
+}
+
+public function resolveLogsFromPreNormalized(
+    array  $employIds,
+    array  $timeWindowsMap,
+    array  $scheduleTypeMap,
+    string $date,
+    array  $preNormalizedLogs
+): array {
+    if (empty($employIds)) return [];
+
+    $result = [];
+
+    foreach ($employIds as $employId) {
+        $key          = (string) $employId;
+        $tw           = $timeWindowsMap[$employId]  ?? [];
+        $scheduleType = $scheduleTypeMap[$employId] ?? 'Normal';
+        $isShifting   = $scheduleType === 'Shifting';
+        $isNightShift = $this->isNightShift($tw);
+        $empLogs      = $preNormalizedLogs[$key] ?? [];
+
+        if (!$isNightShift && empty($tw)) {
+            $isNightShift = $this->detectNightShiftFromLogs($empLogs, $date);
+        }
+
+        $logsForDate = $this->filterLogsForDateFast($empLogs, $date, $isNightShift, $tw);
+        $logsForDate = $this->deduplicateLogs($logsForDate, $isNightShift);
+
+        $result[$employId] = $this->assignPunches($tw, $logsForDate, $isNightShift, $isShifting);
+    }
+
+    return $result;
+}
+
+private function filterLogsForDateFast(
+    array  $logs,
+    string $date,
+    bool   $isNightShift,
+    array  $tw
+): array {
+    if (empty($logs)) return [];
+
+    $yesterday = date('Y-m-d', strtotime($date . ' -1 day'));
+    $tomorrow  = date('Y-m-d', strtotime($date . ' +1 day'));
+    $padMin    = fn(int $n) => str_pad($n, 2, '0', STR_PAD_LEFT);
+
+    if ($isNightShift && !empty($tw[0])) {
+        [$h, $m] = explode(':', $tw[0]);
+        $shiftStartHour         = (int) $h;
+        $hasPrevEveningCheckIn  = false;
+        $hasPrevOrEarlyCheckOut = false;
+        $hasTodayEveningIn      = false;
+
+        foreach ($logs as $log) {
+            $logDate = $log['date'];
+            $hour    = (int) explode(':', $log['time'])[0];
+
+            if ($logDate === $yesterday && $hour >= $shiftStartHour && $log['type'] === 'check_in') {
+                $hasPrevEveningCheckIn = true;
             }
-            
-            // Get logs from next date (before 07:00, or before 08:00 for check_out)
-            foreach ($logs as $log) {
-                if ($log['date'] === $nextDate) {
-                    $hour = (int) date('H', strtotime($log['time']));
-                    $type = strtolower($log['type']);
-                    $isCheckout = str_contains($type, 'check_out');
-                    if ($hour <= 5 || ($hour <= 7 && $isCheckout)) {
-                        $result[] = $log;
-                    }
-                }
+            if ($log['type'] === 'check_out' &&
+                ($logDate === $yesterday || ($logDate === $date && $hour < 14))) {
+                $hasPrevOrEarlyCheckOut = true;
+            }
+            if ($logDate === $date && $hour >= 14 && $log['type'] === 'check_in') {
+                $hasTodayEveningIn = true;
+            }
+        }
+
+        $prevDayWasRestDay = $hasPrevEveningCheckIn && !$hasPrevOrEarlyCheckOut && !$hasTodayEveningIn;
+
+        if ($prevDayWasRestDay) {
+            $startHour   = max(0, $shiftStartHour - 2);
+            $windowStart = $yesterday . ' ' . $padMin($startHour) . ':' . $m . ':00';
+            $windowEnd   = $date      . ' 13:59:59';
+            $anchorDate  = $yesterday;
+        } else {
+            $startHour   = max(0, $shiftStartHour - 2);
+            $windowStart = $date     . ' ' . $padMin($startHour) . ':' . $m . ':00';
+            $windowEnd   = $tomorrow . ' 13:59:59';
+            $anchorDate  = $date;
+        }
+
+        $logsInWindow = array_values(array_filter(
+            $logs,
+            fn($log) => $log['datetime'] >= $windowStart && $log['datetime'] <= $windowEnd
+        ));
+
+        if (empty($logsInWindow)) return [];
+
+        $hasAnchorPunch = false;
+        foreach ($logsInWindow as $log) {
+            if ($log['date'] === $anchorDate && (int) explode(':', $log['time'])[0] >= $shiftStartHour) {
+                $hasAnchorPunch = true;
+                break;
+            }
+        }
+
+        return $hasAnchorPunch ? $logsInWindow : [];
+
+    } elseif (!empty($tw[0])) {
+        [$h, $m] = explode(':', $tw[0]);
+        $startHour   = max(0, (int)$h - 3);
+        $windowStart = $date . ' ' . $padMin($startHour) . ':' . $m . ':00';
+
+        if (!empty($tw[7])) {
+            [$ho, $mo] = explode(':', $tw[7]);
+            $endHour    = (int)$ho + 4;
+            $spansNight = (int)$tw[7] < (int)$tw[0];
+            $endDate    = ($spansNight || $endHour >= 24) ? $tomorrow : $date;
+            if ($endHour >= 24) $endHour -= 24;
+            if ((int)$h < 14) {
+                $windowEnd = $date . ' 23:59:59';
+            } else {
+                $windowEnd = min($endDate . ' ' . $padMin($endHour) . ':' . $mo . ':59',
+                                 $tomorrow . ' 13:59:59');
             }
         } else {
-            // Day shift - only logs from the current date
-            // Exclude early morning logs that belong to previous night shift
-            $prevDate = date('Y-m-d', strtotime($date . ' -1 day'));
-            $prevDayHasNightShift = $this->checkPreviousDayNightShift($logs, $prevDate);
-            
-            foreach ($logs as $log) {
-                if ($log['date'] === $date) {
-                    $hour = (int) date('H', strtotime($log['time']));
-                    // Skip early morning logs if previous day was a night shift
-                    if ($prevDayHasNightShift && $hour <= 7) {
-                        continue;
-                    }
-                    $result[] = $log;
-                }
-            }
+            $windowEnd = $date . ' 23:59:59';
         }
-        
-        return $result;
+
+        return array_values(array_filter(
+            $logs,
+            fn($log) => $log['datetime'] >= $windowStart && $log['datetime'] <= $windowEnd
+        ));
+
+    } elseif ($isNightShift) {
+        $windowStart = $date     . ' 14:00:00';
+        $windowEnd   = $tomorrow . ' 13:59:59';
+    } else {
+        $windowStart = $date . ' 00:00:00';
+        $windowEnd   = $date . ' 23:59:59';
     }
-    
+
+    return array_values(array_filter(
+        $logs,
+        fn($log) => $log['datetime'] >= $windowStart && $log['datetime'] <= $windowEnd
+    ));
+}
+
+    // -------------------------------------------------------------------------
+    // FETCHING
+    // -------------------------------------------------------------------------
+
     /**
-     * Check if previous day had a night shift
+     * Fetch biometric logs (automatic + manual) for all employees in bulk.
+     * Returns logs grouped by employid: [ employid => [ ...logs ] ]
      */
-    private function checkPreviousDayNightShift(array $logs, string $prevDate): bool
+    private function fetchAllLogs(array $employIds, string $from, string $to): array
     {
-        foreach ($logs as $log) {
-            if ($log['date'] === $prevDate) {
-                $hour = (int) date('H', strtotime($log['time']));
-                $type = strtolower($log['type']);
-                $isCheckIn = str_contains($type, 'check_in');
-                if ($isCheckIn && $hour >= 18) {
-                    return true;
+        $grouped = [];
+
+        $autoLogs = BiometricLog::whereIn('employid', $employIds)
+            ->whereBetween('datetime', [$from . ' 00:00:00', $to . ' 23:59:59'])
+            ->orderBy('datetime')
+            ->get(['employid', 'datetime', 'punch_type']);
+
+        foreach ($autoLogs as $row) {
+            $grouped[$row->employid][] = $this->normalizeLog(
+                $row->employid, $row->datetime, $row->punch_type, 'auto'
+            );
+        }
+
+        $manualLogs = BiometricLogManual::whereIn('employid', $employIds)
+            ->whereBetween('datetime', [$from . ' 00:00:00', $to . ' 23:59:59'])
+            ->orderBy('datetime')
+            ->get(['employid', 'datetime', 'punch_type']);
+
+        foreach ($manualLogs as $row) {
+            $grouped[$row->employid][] = $this->normalizeLog(
+                $row->employid, $row->datetime, $row->punch_type, 'manual'
+            );
+        }
+
+        // Sort each employee's logs by datetime
+        foreach ($grouped as &$logs) {
+            usort($logs, fn($a, $b) => strcmp($a['datetime'], $b['datetime']));
+        }
+        unset($logs);
+
+        return $grouped;
+    }
+
+    /**
+     * Normalize a raw DB row into a consistent log array.
+     */
+    private function normalizeLog(
+        string $employId,
+        string $datetime,
+               $rawPunchType,
+        string $source
+    ): array {
+        $dt = Carbon::parse($datetime);
+
+        return [
+            'employid' => $employId,
+            'datetime' => $datetime,
+            'date'     => $dt->toDateString(),
+            'time'     => $dt->format('H:i'),
+            'type'     => $this->mapPunchType($rawPunchType),
+            'source'   => $source,
+        ];
+    }
+
+    /**
+     * Map raw DB punch_type value → canonical string.
+     *
+     * DB values → type:
+     *   0 / check_in  → check_in     1 / check_out → check_out
+     *   2 / break_out → break_out    3 / break_in  → break_in
+     *   4 / lunch_out → lunch_out    5 / lunch_in  → lunch_in
+     */
+    private function mapPunchType($raw): string
+    {
+        $map = [
+            '0'         => 'check_in',
+            '1'         => 'check_out',
+            '2'         => 'break_out',
+            '3'         => 'break_in',
+            '4'         => 'lunch_out',
+            '5'         => 'lunch_in',
+            'check_in'  => 'check_in',
+            'check_out' => 'check_out',
+            'break_out' => 'break_out',
+            'break_in'  => 'break_in',
+            'lunch_out' => 'lunch_out',
+            'lunch_in'  => 'lunch_in',
+        ];
+
+        return $map[(string) $raw] ?? 'check_in';
+    }
+
+    // -------------------------------------------------------------------------
+    // DATE WINDOWING
+    // -------------------------------------------------------------------------
+
+    /**
+     * Whether a shift is a night shift based on TIME_WINDOWS[0] being >= 18:00.
+     */
+    private function isNightShift(array $tw): bool
+    {
+        if (empty($tw[0])) return false;
+        return (int) explode(':', $tw[0])[0] >= 18;
+    }
+
+    /**
+     * Filter raw logs to only those that belong to the employee's shift window
+     * for the target date.
+     *
+     * Day shift (known start):
+     *   window = [expected_time_in - 3h  →  expected_time_out + 4h]
+     *
+     * Night shift (known start):
+     *   Normal:        window = [today at shift_start - 2h  →  tomorrow 13:59]
+     *   Prev rest day: window = [yesterday at shift_start - 2h  →  tomorrow 13:59]
+     *   This handles Scenario 8 — employee's check_in fell on yesterday (rest day).
+     *
+     * No-schedule night detected:
+     *   window = [today 14:00 → tomorrow 13:59]
+     *
+     * No-schedule day / unknown:
+     *   window = [today 00:00 → today 23:59]
+     */
+    private function filterLogsForDate(
+    array  $logs,
+    string $date,
+    bool   $isNightShift,
+    array  $tw
+): array {
+    $base      = Carbon::parse($date);
+    $yesterday = $base->copy()->subDay();
+    $tomorrow  = $base->copy()->addDay();
+
+    if ($isNightShift && !empty($tw[0])) {
+        // Night shift: window anchored to expected check_in on either
+        // today OR yesterday (when prev day was rest day).
+        // Start = expected check_in - 2hr grace (on whichever day it falls)
+        // End   = tomorrow 13:59
+        [$h, $m] = explode(':', $tw[0]);
+
+        // Check if there is a punch on yesterday evening at/after shift start
+        // AND no check_in today evening → shift started on yesterday (rest day)
+        $shiftStartHour      = (int)$h;
+$hasPrevEveningCheckIn  = false;
+$hasPrevOrEarlyCheckOut = false;
+$hasTodayEveningIn      = false;
+
+foreach ($logs as $log) {
+    $logDate = Carbon::parse($log['datetime'])->toDateString();
+    $hour    = (int) explode(':', $log['time'])[0];
+
+    // Must be a check_in specifically on yesterday evening
+    // (not just any punch type) to confirm shift actually started yesterday
+    if (
+        $logDate === $yesterday->toDateString() &&
+        $hour >= $shiftStartHour &&
+        $log['type'] === 'check_in'
+    ) {
+        $hasPrevEveningCheckIn = true;
+    }
+
+    // check_out on yesterday OR early today (before 14:00) =
+    // previous night shift was completed
+    if (
+        $log['type'] === 'check_out' &&
+        (
+            $logDate === $yesterday->toDateString() ||
+            ($logDate === $date && $hour < 14)
+        )
+    ) {
+        $hasPrevOrEarlyCheckOut = true;
+    }
+
+    // New shift check_in this evening (today)
+    if (
+        $logDate === $date &&
+        $hour >= 14 &&
+        $log['type'] === 'check_in'
+    ) {
+        $hasTodayEveningIn = true;
+    }
+}
+
+// Only carry over previous shift logs if ALL are true:
+// 1. There was an actual check_in yesterday evening (not just any punch)
+// 2. That shift has no check_out yet (still ongoing / missed tap out)
+// 3. No new check_in started this evening (new shift hasn't begun)
+$prevDayWasRestDay = $hasPrevEveningCheckIn
+    && !$hasPrevOrEarlyCheckOut
+    && !$hasTodayEveningIn;
+
+        if ($prevDayWasRestDay) {
+            $windowStart = $yesterday->copy()->setTime((int)$h, (int)$m)->subHours(2);
+            $windowEnd   = $base->copy()->setTime(13, 59);
+        } else {
+            $windowStart = $base->copy()->setTime((int)$h, (int)$m)->subHours(2);
+            $windowEnd   = $tomorrow->copy()->setTime(13, 59);
+        }
+
+        // Soft guard: if no logs at all exist within the window, return empty.
+        // This is safe because an employee with truly no activity (rest day)
+        // will have zero logs in the window — unlike Scenario 5 (missing time_in)
+        // where other punch types (break_out, check_out, etc.) still exist.
+        $logsInWindow = array_values(array_filter(
+            $logs,
+            fn(array $log) => Carbon::parse($log['datetime'])->between($windowStart, $windowEnd)
+        ));
+
+        if (empty($logsInWindow)) {
+            return [];
+        }
+
+        // Anchor guard: the shift must have at least one punch that actually
+        // falls on the anchor date (yesterday if prevDayWasRestDay, today otherwise)
+        // at or after the shift start hour. Without this, today's early-morning
+        // day shift logs (e.g. 06:56 check-in) bleed into yesterday's night
+        // shift window since $windowEnd reaches into tomorrow 13:59.
+        $anchorDate = $prevDayWasRestDay
+            ? $yesterday->toDateString()
+            : $base->toDateString();
+
+        $hasAnchorPunch = collect($logsInWindow)->contains(function ($log) use ($anchorDate, $shiftStartHour) {
+            $logDate = Carbon::parse($log['datetime'])->toDateString();
+            $hour    = (int) explode(':', $log['time'])[0];
+            return $logDate === $anchorDate && $hour >= $shiftStartHour;
+        });
+
+        if (!$hasAnchorPunch) {
+            return [];
+        }
+
+        return $logsInWindow;
+
+    } elseif (!empty($tw[0])) {
+    // Scheduled day/afternoon shift — anchor to expected time_in
+    [$h, $m]     = explode(':', $tw[0]);
+    $expectedIn  = $base->copy()->setTime((int)$h, (int)$m);
+    $windowStart = $expectedIn->copy()->subHours(3);
+
+    if (!empty($tw[7])) {
+        [$ho, $mo] = explode(':', $tw[7]);
+        $expectedOut = $base->copy()->setTime((int)$ho, (int)$mo);
+
+        // If expected time_out is before expected time_in,
+        // it spans midnight (e.g. afternoon shift ending past midnight)
+        if ($expectedOut->lt($expectedIn)) {
+            $expectedOut->addDay();
+        }
+
+        $windowEnd = $expectedOut->copy()->addHours(4);
+
+        // Hard cap: never go beyond tomorrow at 13:59
+        // This prevents day shift logs from appearing on rest day views
+        $hardCap = $tomorrow->copy()->setTime(13, 59);
+        if ($windowEnd->gt($hardCap)) {
+            $windowEnd = $hardCap;
+        }
+
+        // Safety: if window end is still beyond midnight of the base date,
+        // and the shift is a day shift (starts before 14:00), cap it at
+        // base date 23:59 to avoid pulling next day's logs
+        $shiftStartHour = (int)$h;
+        if ($shiftStartHour < 14 && $windowEnd->gt($base->copy()->setTime(23, 59))) {
+            $windowEnd = $base->copy()->setTime(23, 59);
+        }
+    } else {
+        // No expected time_out — cap strictly at end of base date
+        $windowEnd = $base->copy()->setTime(23, 59);
+    }
+
+    } elseif ($isNightShift) {
+        // No-schedule night shift detected
+        $windowStart = $base->copy()->setTime(14, 0);
+        $windowEnd   = $tomorrow->copy()->setTime(13, 59);
+
+    } else {
+        // No-schedule day shift or unknown
+        $windowStart = $base->copy()->setTime(0, 0);
+        $windowEnd   = $base->copy()->setTime(23, 59);
+    }
+
+    return array_values(array_filter(
+        $logs,
+        fn(array $log) => Carbon::parse($log['datetime'])->between($windowStart, $windowEnd)
+    ));
+}
+
+private function assignPunches(
+    array $tw,
+    array $logs,
+    bool  $isNightShift,
+    bool  $isShifting
+): array {
+    $slots = $this->emptySlots();
+    if (empty($logs)) return $slots;
+
+    $tm      = fn(string $t) => $this->toAbsMin($t, $isNightShift);
+    $sortAsc = function (array &$arr) use ($tm): void {
+        usort($arr, fn($a, $b) => $tm($a['time']) <=> $tm($b['time']));
+    };
+
+    // ── Bucket by type ────────────────────────────────────────────────────
+    $checkIns  = $checkOuts = $breakOuts = $breakIns = $lunchOuts = $lunchIns = [];
+
+    foreach ($logs as $log) {
+        match ($log['type']) {
+            'check_in'  => $checkIns[]  = $log,
+            'check_out' => $checkOuts[] = $log,
+            'break_out' => $breakOuts[] = $log,
+            'break_in'  => $breakIns[]  = $log,
+            'lunch_out' => $lunchOuts[] = $log,
+            'lunch_in'  => $lunchIns[]  = $log,
+            default     => null,
+        };
+    }
+
+    $sortAsc($checkIns);
+    $sortAsc($checkOuts);
+    $sortAsc($breakOuts);
+    $sortAsc($breakIns);
+    $sortAsc($lunchOuts);
+    $sortAsc($lunchIns);
+
+    // ── Scenario 4: Generic device promotion ──────────────────────────────
+    // Device only emits check_in/check_out and more than 2 exist.
+    // Promote middle punches to break slots alternately.
+    $genericCount   = count($checkIns) + count($checkOuts);
+    $hasTypedBreaks = !empty($breakOuts) || !empty($breakIns)
+                   || !empty($lunchOuts) || !empty($lunchIns);
+
+    if ($genericCount > 2 && !$hasTypedBreaks) {
+        $all = array_merge($checkIns, $checkOuts);
+        usort($all, fn($a, $b) => $tm($a['time']) <=> $tm($b['time']));
+
+        $checkIns  = [array_shift($all)]; // earliest → time_in
+        $checkOuts = [array_pop($all)];   // latest   → time_out
+
+        foreach ($all as $i => $punch) {
+            if ($i % 2 === 0) $breakOuts[] = $punch;
+            else              $breakIns[]  = $punch;
+        }
+
+        $sortAsc($breakOuts);
+        $sortAsc($breakIns);
+    }
+
+    // ── Slot 0: time_in (earliest check_in) ──────────────────────────────
+    if (!empty($checkIns)) {
+        $slots['time_in'] = $checkIns[0]['time'];
+    }
+
+    // ── Slot 7: time_out (latest check_out) ──────────────────────────────
+    if (!empty($checkOuts)) {
+        $slots['time_out'] = end($checkOuts)['time'];
+    }
+
+    // ── Slots 3 & 4: lunch (dedicated punch types fill directly) ─────────
+    if (!empty($lunchOuts)) $slots['lunch_out'] = $lunchOuts[0]['time'];
+    if (!empty($lunchIns))  $slots['lunch_in']  = $lunchIns[0]['time'];
+
+    // ── Break out candidates ──────────────────────────────────────────────
+    // lunch_out included only when not already filled by a dedicated punch
+    // so that break_out punches can fill it when device has no lunch type.
+    $outCandidates = [];
+    if (!$isShifting)                 $outCandidates[] = ['slot' => 'break_out_1', 'twIdx' => 1];
+    if ($slots['lunch_out'] === null) $outCandidates[] = ['slot' => 'lunch_out',   'twIdx' => 3];
+    $outCandidates[]                                   = ['slot' => 'break_out_2', 'twIdx' => 5];
+
+    $this->distributeBreaks($slots, $breakOuts, $outCandidates, $tw, $isNightShift);
+
+    // ── Break in candidates ───────────────────────────────────────────────
+    $inCandidates = [];
+    if (!$isShifting)                $inCandidates[] = ['slot' => 'break_in_1', 'twIdx' => 2];
+    if ($slots['lunch_in'] === null) $inCandidates[] = ['slot' => 'lunch_in',   'twIdx' => 4];
+    $inCandidates[]                                  = ['slot' => 'break_in_2', 'twIdx' => 6];
+
+    $this->distributeBreaks($slots, $breakIns, $inCandidates, $tw, $isNightShift);
+
+    // ── Shifting: clear short-break slots ────────────────────────────────
+    if ($isShifting) {
+        $slots['break_out_1'] = null;
+        $slots['break_in_1']  = null;
+    }
+
+    // ── Repair misplacements ──────────────────────────────────────────────
+    $this->repairSlots($slots);
+
+    return $slots;
+}
+
+private function distributeBreaks(
+    array &$slots,
+    array  $logs,
+    array  $candidates,
+    array  $tw,
+    bool   $isNightShift
+): void {
+    if (empty($logs)) return;
+
+    $tm = fn(string $t) => $this->toAbsMin($t, $isNightShift);
+
+    // Pre-compute expected minutes for all candidates
+    $candidatesWithMin = array_map(fn($c) => [
+        'slot'   => $c['slot'],
+        'twIdx'  => $c['twIdx'],
+        'expMin' => isset($tw[$c['twIdx']]) ? $tm($tw[$c['twIdx']]) : null,
+    ], $candidates);
+
+    // Strategy: assign the Nth punch to the Nth available slot.
+    // Punches and slots are both in chronological order.
+    // Only skip a slot when the punch is clearly too late for it (>90min past
+    // expected) AND the next slot is a significantly better fit.
+    // This handles Scenario 3 (skipped break) correctly.
+
+    foreach ($logs as $log) {
+        $logMin   = $tm($log['time']);
+        $assigned = null;
+
+        foreach ($candidatesWithMin as $i => $candidate) {
+            $slotName = $candidate['slot'];
+            if ($slots[$slotName] !== null) continue; // already filled
+
+            $expMin = $candidate['expMin'];
+
+            // No TIME_WINDOWS → sequential fill
+            if ($expMin === null) {
+                $assigned = $slotName;
+                break;
+            }
+
+            // Find next candidate's expected time
+            $nextExpMin = null;
+            for ($j = $i + 1; $j < count($candidatesWithMin); $j++) {
+                if ($candidatesWithMin[$j]['expMin'] !== null) {
+                    $nextExpMin = $candidatesWithMin[$j]['expMin'];
+                    break;
+                }
+            }
+
+            // Skip this slot only when BOTH conditions are true:
+            //   1. Punch is more than 90min past this slot's expected time
+            //   2. Next slot's expected time is a closer match
+            // Otherwise always assign to the current (earliest available) slot.
+            $tooLate        = $logMin > ($expMin + 90);
+            $nextIsBetter   = $nextExpMin !== null
+                && abs($logMin - $nextExpMin) < abs($logMin - $expMin);
+
+            if ($tooLate && $nextIsBetter) {
+                continue; // skip — employee likely skipped this break
+            }
+
+            $assigned = $slotName;
+            break;
+        }
+
+        // Fallback: first empty candidate (punch outside all expected windows)
+        if ($assigned === null) {
+            foreach ($candidatesWithMin as $candidate) {
+                if ($slots[$candidate['slot']] === null) {
+                    $assigned = $candidate['slot'];
+                    break;
                 }
             }
         }
-        return false;
+
+        if ($assigned !== null) {
+            $slots[$assigned] = $log['time'];
+        }
     }
-    
+}
+
+    // -------------------------------------------------------------------------
+    // DEDUPLICATION
+    // -------------------------------------------------------------------------
+
+    private const DEDUP_WINDOW_MINUTES = 3;
+
     /**
-     * Deduplicate logs - keep earliest for check_in/break_in/lunch_in,
-     * keep latest for check_out/break_out/lunch_out
+     * Collapse accidental duplicate taps of the same punch type that occur
+     * within DEDUP_WINDOW_MINUTES of each other. (Scenario 10)
+     *
+     * In-punches  (check_in, break_in, lunch_in)   → keep EARLIEST in cluster.
+     * Out-punches (check_out, break_out, lunch_out) → keep LATEST   in cluster.
+     *
+     * Punches separated by more than the window are kept as distinct events,
+     * so two genuine breaks separated by hours both survive.
      */
     private function deduplicateLogs(array $logs, bool $isNightShift): array
     {
-        if (empty($logs)) return $logs;
-        
-        $toMin = function($time) use ($isNightShift) {
-            if (empty($time)) return 0;
-            $parts = explode(':', $time);
-            $total = ((int)$parts[0] * 60) + (int)$parts[1];
-            return ($isNightShift && (int)$parts[0] < 12) ? $total + 1440 : $total;
-        };
-        
-        $groups = [];
+        if (empty($logs)) return [];
+
+        $outTypes = ['check_out', 'break_out', 'lunch_out'];
+
+        // Group by type
+        $byType = [];
         foreach ($logs as $log) {
-            $groups[$log['type']][] = $log;
+            $byType[$log['type']][] = $log;
         }
-        
-        $outTypes = ['break_out', 'lunch_out', 'check_out'];
-        $inTypes = ['break_in', 'lunch_in', 'check_in'];
-        
+
         $deduped = [];
-        
-        foreach ($groups as $type => $typeLogs) {
-            usort($typeLogs, fn($a, $b) => $toMin($a['time']) <=> $toMin($b['time']));
-            
+
+        foreach ($byType as $type => $typeLogs) {
+            usort($typeLogs, fn($a, $b) =>
+                $this->toAbsMin($a['time'], $isNightShift) <=>
+                $this->toAbsMin($b['time'], $isNightShift)
+            );
+
             $keepLatest = in_array($type, $outTypes);
-            $keepEarliest = in_array($type, $inTypes);
-            
-            if (!$keepLatest && !$keepEarliest) {
-                foreach ($typeLogs as $l) $deduped[] = $l;
-                continue;
-            }
-            
-            $merged = [];
-            $window = [$typeLogs[0]];
-            
+            $cluster    = [$typeLogs[0]];
+
             for ($i = 1; $i < count($typeLogs); $i++) {
-                $prev = end($window);
-                $diff = $toMin($typeLogs[$i]['time']) - $toMin($prev['time']);
-                if ($diff <= 5) {
-                    $window[] = $typeLogs[$i];
+                $gap = $this->toAbsMin($typeLogs[$i]['time'], $isNightShift)
+                     - $this->toAbsMin(end($cluster)['time'], $isNightShift);
+
+                if ($gap <= self::DEDUP_WINDOW_MINUTES) {
+                    $cluster[] = $typeLogs[$i];
                 } else {
-                    $merged[] = $keepLatest ? end($window) : $window[0];
-                    $window = [$typeLogs[$i]];
+                    $deduped[] = $keepLatest ? end($cluster) : $cluster[0];
+                    $cluster   = [$typeLogs[$i]];
                 }
             }
-            $merged[] = $keepLatest ? end($window) : $window[0];
-            
-            foreach ($merged as $l) $deduped[] = $l;
+
+            $deduped[] = $keepLatest ? end($cluster) : $cluster[0];
         }
-        
+
+        usort($deduped, fn($a, $b) =>
+            $this->toAbsMin($a['time'], $isNightShift) <=>
+            $this->toAbsMin($b['time'], $isNightShift)
+        );
+
         return $deduped;
     }
-    
+
+    // -------------------------------------------------------------------------
+    // SLOT REPAIR
+    // -------------------------------------------------------------------------
+
     /**
-     * Assign punches to 8 slots based on schedule times and actual logs
-     * Slots: 0=check_in, 1=break_out1, 2=break_in1, 3=lunch_out, 4=lunch_in,
-     *        5=break_out2, 6=break_in2, 7=check_out
+     * Fix common slot misplacements after the main assignment.
+     *
+     * These cases arise when an employee has an orphaned break_in or lunch_in
+     * with no matching out-punch (Scenario 13), or when break punches land in
+     * slightly unexpected slots due to borderline timing.
+     *
+     * Case 1 — orphaned break_in_1 + lunch_out exists + lunch_in empty:
+     *           break_in_1 → lunch_in
+     *           (employee had no break_out_1 tap but did tap out of lunch)
+     *
+     * Case 2 — orphaned break_in_1 + break_out_2 exists + break_in_2 empty:
+     *           break_in_1 → break_in_2
+     *           (break_in landed one slot too early)
+     *
+     * Case 3 — orphaned lunch_in + break_out_2 exists + break_in_2 empty:
+     *           lunch_in → break_in_2
+     *           (lunch_in landed one slot too early)
      */
-    private function assignPunches(array $shiftTimes, array $logs, bool $isNightShift, int $shiftType = 1): array
+    private function repairSlots(array &$slots): void
     {
-        $assigned = array_fill(0, 8, '');
-        if (empty($logs)) return $assigned;
-        
-        $checkInLogs = [];
-        $checkOutLogs = [];
-        $breakOutLogs = [];
-        $breakInLogs = [];
-        $lunchOutLogs = [];
-        $lunchInLogs = [];
-        
-        foreach ($logs as $log) {
-            switch ($log['type']) {
-                case 'check_in': $checkInLogs[] = $log; break;
-                case 'check_out': $checkOutLogs[] = $log; break;
-                case 'break_out': $breakOutLogs[] = $log; break;
-                case 'break_in': $breakInLogs[] = $log; break;
-                case 'lunch_out': $lunchOutLogs[] = $log; break;
-                case 'lunch_in': $lunchInLogs[] = $log; break;
-            }
+        // Case 1
+        if (
+            $slots['break_out_1'] === null &&
+            $slots['break_in_1']  !== null &&
+            $slots['lunch_out']   !== null &&
+            $slots['lunch_in']    === null
+        ) {
+            $slots['lunch_in']   = $slots['break_in_1'];
+            $slots['break_in_1'] = null;
         }
-        
-        $tmFn = fn($t) => $this->timeToMinutes($t, $isNightShift);
-        
-        $sortByTime = function (&$arr) use ($tmFn) {
-            usort($arr, fn($a, $b) => $tmFn($a['time']) <=> $tmFn($b['time']));
-        };
-        
-        // If device emits everything as check_in/check_out, promote middle punches
-        if (count($checkInLogs) + count($checkOutLogs) > 2) {
-            $allCheckLogs = array_merge($checkInLogs, $checkOutLogs);
-            usort($allCheckLogs, fn($a, $b) => $tmFn($a['time']) <=> $tmFn($b['time']));
-            
-            $checkInLogs = [array_shift($allCheckLogs)];
-            $checkOutLogs = [array_pop($allCheckLogs)];
-            
-            foreach ($allCheckLogs as $i => $punch) {
-                if ($i % 2 === 0) {
-                    $breakOutLogs[] = $punch;
-                } else {
-                    $breakInLogs[] = $punch;
-                }
-            }
+
+        // Case 2
+        if (
+            $slots['break_out_1'] === null &&
+            $slots['break_in_1']  !== null &&
+            $slots['break_out_2'] !== null &&
+            $slots['break_in_2']  === null
+        ) {
+            $slots['break_in_2'] = $slots['break_in_1'];
+            $slots['break_in_1'] = null;
         }
-        
-        // Slot 0: earliest check_in
-        $sortByTime($checkInLogs);
-        if (!empty($checkInLogs)) $assigned[0] = $checkInLogs[0]['time'];
-        
-        // Slot 7: latest check_out
-        $sortByTime($checkOutLogs);
-        if (!empty($checkOutLogs)) $assigned[7] = end($checkOutLogs)['time'];
-        
-        $sortByTime($breakOutLogs);
-        $sortByTime($breakInLogs);
-        $sortByTime($lunchOutLogs);
-        $sortByTime($lunchInLogs);
-        
-        $skipBreak1 = ($shiftType === 2);
-        
-        // PATH A: TIME_WINDOWS-aware assignment
-        if (!empty($shiftTimes)) {
-            // Assign dedicated lunch punches
-            if (!empty($lunchOutLogs) && !empty($shiftTimes[3]))
-                $assigned[3] = $lunchOutLogs[0]['time'];
-            if (!empty($lunchInLogs) && !empty($shiftTimes[4]))
-                $assigned[4] = $lunchInLogs[0]['time'];
-            
-            // Build ordered slot lists
-            $outSlots = [];
-            if (!$skipBreak1 && !empty($shiftTimes[1]))
-                $outSlots[] = ['slot' => 1, 'exp' => $tmFn($shiftTimes[1])];
-            if (!empty($shiftTimes[3]))
-                $outSlots[] = ['slot' => 3, 'exp' => $tmFn($shiftTimes[3])];
-            if (!empty($shiftTimes[5]))
-                $outSlots[] = ['slot' => 5, 'exp' => $tmFn($shiftTimes[5])];
-            
-            $inSlots = [];
-            if (!$skipBreak1 && !empty($shiftTimes[2]))
-                $inSlots[] = ['slot' => 2, 'exp' => $tmFn($shiftTimes[2])];
-            if (!empty($shiftTimes[4]))
-                $inSlots[] = ['slot' => 4, 'exp' => $tmFn($shiftTimes[4])];
-            if (!empty($shiftTimes[6]))
-                $inSlots[] = ['slot' => 6, 'exp' => $tmFn($shiftTimes[6])];
-            
-            // Assign break_out slots
-            $slotIndex = 0;
-            $total = count($outSlots);
-            foreach ($breakOutLogs as $log) {
-                $logMin = $tmFn($log['time']);
-                while ($slotIndex < $total && !empty($assigned[$outSlots[$slotIndex]['slot']])) {
-                    $slotIndex++;
-                }
-                if ($slotIndex >= $total) break;
-                
-                $bestSlot = null;
-                for ($s = $slotIndex; $s < $total; $s++) {
-                    if (!empty($assigned[$outSlots[$s]['slot']])) continue;
-                    if ($logMin >= $outSlots[$s]['exp']) {
-                        $bestSlot = $s;
-                    } else {
-                        break;
-                    }
-                }
-                if ($bestSlot !== null) {
-                    $assigned[$outSlots[$bestSlot]['slot']] = $log['time'];
-                    $slotIndex = $bestSlot + 1;
-                } else {
-                    for ($s = $slotIndex; $s < $total; $s++) {
-                        if (empty($assigned[$outSlots[$s]['slot']])) {
-                            $assigned[$outSlots[$s]['slot']] = $log['time'];
-                            $slotIndex = $s + 1;
-                            break;
-                        }
-                    }
-                }
-            }
-            
-            // Assign break_in slots
-            $slotIndex = 0;
-            $total = count($inSlots);
-            foreach ($breakInLogs as $log) {
-                $logMin = $tmFn($log['time']);
-                while ($slotIndex < $total && !empty($assigned[$inSlots[$slotIndex]['slot']])) {
-                    $slotIndex++;
-                }
-                if ($slotIndex >= $total) break;
-                
-                $bestSlot = null;
-                for ($s = $slotIndex; $s < $total; $s++) {
-                    if (!empty($assigned[$inSlots[$s]['slot']])) continue;
-                    if ($logMin >= $inSlots[$s]['exp']) {
-                        $bestSlot = $s;
-                    } else {
-                        break;
-                    }
-                }
-                if ($bestSlot !== null) {
-                    $assigned[$inSlots[$bestSlot]['slot']] = $log['time'];
-                    $slotIndex = $bestSlot + 1;
-                } else {
-                    for ($s = $slotIndex; $s < $total; $s++) {
-                        if (empty($assigned[$inSlots[$s]['slot']])) {
-                            $assigned[$inSlots[$s]['slot']] = $log['time'];
-                            $slotIndex = $s + 1;
-                            break;
-                        }
-                    }
-                }
-            }
-            
-            // Check if PATH A assigned anything
-            $pathAAssigned = false;
-            foreach ([1,2,3,4,5,6] as $s) {
-                if (!empty($assigned[$s])) { $pathAAssigned = true; break; }
-            }
-            
-            // Fallback to heuristic pairing if PATH A assigned nothing
-            if (!$pathAAssigned && (!empty($breakOutLogs) || !empty($breakInLogs))) {
-                $this->heuristicPairing($assigned, $breakOutLogs, $breakInLogs, $skipBreak1, $tmFn, $isNightShift);
-            }
-        } else {
-            // PATH B: No schedule - heuristic assignment
-            if (!empty($lunchOutLogs)) $assigned[3] = $lunchOutLogs[0]['time'];
-            if (!empty($lunchInLogs)) $assigned[4] = $lunchInLogs[0]['time'];
-            $this->heuristicPairing($assigned, $breakOutLogs, $breakInLogs, $skipBreak1, $tmFn, $isNightShift);
-        }
-        
-        // Re-pair orphaned in-punches
-        $this->repairOrphanedPunches($assigned);
-        
-        return $assigned;
-    }
-    
-    /**
-     * Heuristic pairing for break_out and break_in
-     */
-    private function heuristicPairing(array &$assigned, array $breakOutLogs, array $breakInLogs, bool $skipBreak1, callable $tmFn, bool $isNightShift): void
-    {
-        // Pair each break_out with nearest subsequent break_in
-        $usedBreakIns = [];
-        $breakPairs = [];
-        
-        foreach ($breakOutLogs as $oIdx => $bOut) {
-            $outMins = $tmFn($bOut['time']);
-            $closest = null;
-            $minD = PHP_INT_MAX;
-            foreach ($breakInLogs as $iIdx => $bIn) {
-                if (in_array($iIdx, $usedBreakIns)) continue;
-                $inMins = $tmFn($bIn['time']);
-                $diff = $inMins - $outMins;
-                if ($diff < 0 && $isNightShift) $diff += 1440;
-                if ($diff > 0 && $diff <= 180 && $diff < $minD) {
-                    $minD = $diff;
-                    $closest = $iIdx;
-                }
-            }
-            if ($closest !== null) {
-                $breakPairs[$oIdx] = $closest;
-                $usedBreakIns[] = $closest;
-            }
-        }
-        
-        // Define slot order
-        $outSlots = [];
-        if (!$skipBreak1) $outSlots[] = 1;
-        $outSlots[] = 3;
-        $outSlots[] = 5;
-        
-        $inSlots = [];
-        if (!$skipBreak1) $inSlots[] = 2;
-        $inSlots[] = 4;
-        $inSlots[] = 6;
-        
-        // Filter out already-filled slots
-        $outSlots = array_values(array_filter($outSlots, fn($s) => empty($assigned[$s])));
-        $inSlots = array_values(array_filter($inSlots, fn($s) => empty($assigned[$s])));
-        
-        // Assign paired punches
-        $pairIndex = 0;
-        foreach ($breakPairs as $oIdx => $iIdx) {
-            if (!isset($outSlots[$pairIndex]) || !isset($inSlots[$pairIndex])) break;
-            $assigned[$outSlots[$pairIndex]] = $breakOutLogs[$oIdx]['time'];
-            $assigned[$inSlots[$pairIndex]] = $breakInLogs[$iIdx]['time'];
-            $pairIndex++;
-        }
-        
-        // Unpaired break_outs - fill remaining out slots
-        foreach (array_diff_key($breakOutLogs, $breakPairs) as $bOut) {
-            foreach ($outSlots as $slot) {
-                if (empty($assigned[$slot])) {
-                    $assigned[$slot] = $bOut['time'];
-                    break;
-                }
-            }
-        }
-        
-        // Unpaired break_ins - fill remaining in slots
-        $usedInIdxs = array_values($breakPairs);
-        foreach ($breakInLogs as $iIdx => $bIn) {
-            if (in_array($iIdx, $usedInIdxs)) continue;
-            foreach ($inSlots as $slot) {
-                if (empty($assigned[$slot])) {
-                    $assigned[$slot] = $bIn['time'];
-                    break;
-                }
-            }
+
+        // Case 3
+        if (
+            $slots['lunch_out']   === null &&
+            $slots['lunch_in']    !== null &&
+            $slots['break_out_2'] !== null &&
+            $slots['break_in_2']  === null
+        ) {
+            $slots['break_in_2'] = $slots['lunch_in'];
+            $slots['lunch_in']   = null;
         }
     }
-    
+
+    // -------------------------------------------------------------------------
+    // HELPERS
+    // -------------------------------------------------------------------------
+
     /**
-     * Repair orphaned punches (e.g., break_in without break_out)
+     * Convert "HH:MM" to absolute minutes.
+     *
+     * For night shifts, times before 12:00 belong to the next calendar day,
+     * so +1440 is added to keep chronological ordering across midnight.
+     * Example: 22:00 = 1320 min, 02:00 next day = 120 + 1440 = 1560 min → correct order.
      */
-    private function repairOrphanedPunches(array &$assigned): void
+    private function toAbsMin(string $time, bool $isNightShift = false): int
     {
-        // Break Out 1 empty + Break In 1 filled + Lunch Out filled + Lunch In empty
-        // → move Break In 1 to Lunch In
-        if (empty($assigned[1]) && !empty($assigned[2]) && !empty($assigned[3]) && empty($assigned[4])) {
-            $assigned[4] = $assigned[2];
-            $assigned[2] = '';
-        }
-        
-        // Break Out 1 empty + Break In 1 filled + Lunch Out empty + Break Out 2 filled + Break In 2 empty
-        // → move Break In 1 to Break In 2
-        if (empty($assigned[1]) && !empty($assigned[2]) && empty($assigned[3]) && !empty($assigned[5]) && empty($assigned[6])) {
-            $assigned[6] = $assigned[2];
-            $assigned[2] = '';
-        }
-        
-        // Lunch Out empty + Lunch In filled + Break Out 2 filled + Break In 2 empty
-        // → move Lunch In to Break In 2
-        if (empty($assigned[3]) && !empty($assigned[4]) && !empty($assigned[5]) && empty($assigned[6])) {
-            $assigned[6] = $assigned[4];
-            $assigned[4] = '';
-        }
+        if (empty($time)) return 0;
+        [$h, $m] = explode(':', $time);
+        $total   = (int)$h * 60 + (int)$m;
+        return ($isNightShift && (int)$h < 12) ? $total + 1440 : $total;
     }
-    
+
     /**
-     * Empty slot template
+     * For employees with no schedule, detect a night-shift pattern by examining
+     * punch timestamps around the target date.
+     *
+     * This is used for Scenarios 11 and 12 (on-leave / no-schedule employees)
+     * so their logs are windowed correctly even without TIME_WINDOWS.
+     *
+     * Detection priority:
+     *
+     *   Case 1 — check_in exists today:
+     *     hour >= 12 → night shift (shift started this evening)
+     *     hour <  12 → day shift
+     *
+     *   Case 2 — no check_in today but check_in yesterday at/after 12:00:
+     *     Yesterday was a night shift start. If ALL today's punches are before
+     *     noon, they are this shift's tail (check_out, break_in, etc.).
+     *
+     *   Case 3 — no check_in at all (missed tap — Scenario 5):
+     *     Any punch today at/after 18:00 → night shift start
+     *     All punches before noon + prev day had evening activity → night tail
+     */
+    private function detectNightShiftFromLogs(array $empLogs, string $date): bool
+    {
+        $base     = Carbon::parse($date);
+        $prevDate = $base->copy()->subDay()->toDateString();
+
+        $todayPunches = [];
+        $prevPunches  = [];
+
+        foreach ($empLogs as $log) {
+            $logDate = Carbon::parse($log['datetime'])->toDateString();
+            $hour    = (int) explode(':', $log['time'])[0];
+
+            if ($logDate === $date)     $todayPunches[] = ['hour' => $hour, 'type' => $log['type']];
+            if ($logDate === $prevDate) $prevPunches[]  = ['hour' => $hour, 'type' => $log['type']];
+        }
+
+        usort($todayPunches, fn($a, $b) => $a['hour'] <=> $b['hour']);
+        usort($prevPunches,  fn($a, $b) => $a['hour'] <=> $b['hour']);
+
+        // Case 1: check_in today — definitive
+        $todayCheckIn = collect($todayPunches)->first(fn($p) => $p['type'] === 'check_in');
+        if ($todayCheckIn) {
+            return $todayCheckIn['hour'] >= 12;
+        }
+
+        // Case 2: check_in yesterday at/after 12:00
+        $prevCheckIn = collect($prevPunches)->first(fn($p) => $p['type'] === 'check_in');
+        if ($prevCheckIn && $prevCheckIn['hour'] >= 12) {
+            $allTodayBeforeNoon = collect($todayPunches)->every(fn($p) => $p['hour'] < 12);
+            if ($allTodayBeforeNoon || empty($todayPunches)) {
+                return true;
+            }
+        }
+
+        // Case 3: no check_in at all
+        if (!empty($todayPunches)) {
+            $anyEvening      = collect($todayPunches)->contains(fn($p) => $p['hour'] >= 18);
+            $allEarlyMorning = collect($todayPunches)->every(fn($p) => $p['hour'] < 12);
+
+            if ($anyEvening) return true;
+
+            if ($allEarlyMorning) {
+                $prevHadEvening = collect($prevPunches)->contains(fn($p) => $p['hour'] >= 12);
+                return $prevHadEvening;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Return an empty slots array with all 8 slots initialised to null.
      */
     private function emptySlots(): array
     {
         return [
-            'time_in' => null,
+            'time_in'     => null,
             'break_out_1' => null,
-            'break_in_1' => null,
-            'lunch_out' => null,
-            'lunch_in' => null,
+            'break_in_1'  => null,
+            'lunch_out'   => null,
+            'lunch_in'    => null,
             'break_out_2' => null,
-            'break_in_2' => null,
-            'time_out' => null,
+            'break_in_2'  => null,
+            'time_out'    => null,
         ];
-    }
-    
-    /**
-     * Convert time string to minutes, with night shift awareness
-     */
-    private function timeToMinutes(string $time, bool $isNightShift = false): int
-    {
-        if (empty($time)) return 0;
-        $parts = explode(':', $time);
-        $total = ((int)$parts[0] * 60) + (int)$parts[1];
-        return ($isNightShift && (int)$parts[0] < 12) ? $total + 1440 : $total;
     }
 }
