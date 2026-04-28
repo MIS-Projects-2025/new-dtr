@@ -556,10 +556,13 @@ return 'Absent';
             // ── SKIP employees with no active schedule ────────────────────────
             if ($activeSchedule === null) continue;
 
-            $tw           = $timeWindowsMap[$employId]  ?? [];
-            $scheduleType = $scheduleTypeMap[$employId] ?? 'Normal';
-            $isShifting   = $scheduleType === 'Shifting';
-            $actualLogs   = $actualLogsMap[$employId]   ?? [];
+            $tw                 = $timeWindowsMap[$employId]  ?? [];
+            $scheduleType       = $scheduleTypeMap[$employId] ?? 'Normal';
+            $actualLogs         = $actualLogsMap[$employId]   ?? [];
+            $originallyShifting = (int) ($activeSchedule->SHIFT ?? 0) === 2;
+            $isShifting         = $originallyShifting
+                ? true
+                : $this->effectiveIsShifting($scheduleType, $actualLogs, $tw, $today);
 
             [$shiftType, $shiftCode, $isRestDay] = $this->resolveShiftMeta(
                 $activeSchedule, $tw, $actualLogs, $todayCarbon
@@ -570,7 +573,7 @@ return 'Absent';
             $hasAnyPunch    = $this->hasAnyPunch($actualLogs);
             $isUnscheduledRD = ($isRestDay || $isOnLeave) && $hasAnyPunch;
 
-            $obRecord        = null; // getDtrRows doesn't use approvedObs yet
+            $obRecord        = null;
             $obInfo          = null;
             $expectedTimeOut = $tw[7] ?? null;
 
@@ -579,12 +582,11 @@ return 'Absent';
                 $expectedTimeIn, true, $today, false, $obInfo, $expectedTimeOut
             );
 
-            // ── Missing log flags ─────────────────────────────────────────────
             $isPresent      = in_array($remarks, ['Present', 'Late', 'On Leave (Present)']);
             $missingTimeIn  = $isPresent && !$this->hasTimeIn($actualLogs);
             $missingTimeOut = $isPresent && !$this->hasTimeOut($actualLogs);
 
-            $flattened = $this->buildFlattenedSlots($actualLogs, $tw, false, $isShifting);
+            $flattened = $this->buildFlattenedSlots($actualLogs, $tw, false, $isShifting, $originallyShifting);
 
             $rows[] = [
                 'EMPLOYID'          => $employId,
@@ -592,6 +594,7 @@ return 'Absent';
                 'SHIFTCODE'         => $shiftCode,
                 'SHIFT_TYPE'        => $shiftType,
                 'SCHEDULE_TYPE'     => $scheduleType,
+                'IS_SHIFTING'       => $isShifting,
                 'HAS_SCHEDULE'      => true,
                 'IS_REST_DAY'       => $isRestDay,
                 'IS_UNSCHEDULED_RD' => $isUnscheduledRD,
@@ -769,39 +772,51 @@ return 'Absent';
     // PRIVATE HELPERS
     // =========================================================================
 
-    private function resolveTimeWindowsAndType($activeSchedule, Carbon $todayCarbon): array
-    {
-        $schedule      = $activeSchedule->SCHEDULE ?? [];
-        $payrollStart  = $activeSchedule->PAYROLL_DATE_START;
-        $shiftCodesMap = $activeSchedule->shift_codes_map ?? collect();
-        $tw            = [];
-        $scheduleType  = 'Normal';
+private function resolveTimeWindowsAndType($activeSchedule, Carbon $todayCarbon): array
+{
+    $schedule      = $activeSchedule->SCHEDULE ?? [];
+    $payrollStart  = $activeSchedule->PAYROLL_DATE_START;
+    $shiftCodesMap = $activeSchedule->shift_codes_map ?? collect();
+    $tw            = [];
+    $scheduleType  = 'Normal';
+    $shiftField    = (int) ($activeSchedule->SHIFT ?? 0);
 
-        if ($payrollStart) {
-            $payrollStartDate = Carbon::parse($payrollStart)->startOfDay();
-            $dayIndex         = (int) $payrollStartDate->diffInDays($todayCarbon) + 1;
-            $shiftId          = $schedule[(string) $dayIndex] ?? $schedule[$dayIndex] ?? null;
+    if ($payrollStart) {
+        $payrollStartDate = Carbon::parse($payrollStart)->startOfDay();
+        $dayIndex         = (int) $payrollStartDate->diffInDays($todayCarbon) + 1;
+        $shiftId          = $schedule[(string) $dayIndex] ?? $schedule[$dayIndex] ?? null;
 
-            if ($shiftId) {
-                $shiftCode = $shiftCodesMap->get((int) $shiftId);
-                $rawTw     = $shiftCode?->TIME_WINDOWS;
-                $tw        = is_array($rawTw)
-                    ? $rawTw
-                    : (is_string($rawTw) ? (json_decode($rawTw, true) ?? []) : []);
+        if ($shiftId) {
+            $shiftCode = $shiftCodesMap->get((int) $shiftId);
+            $rawTw     = $shiftCode?->TIME_WINDOWS;
+            $tw        = is_array($rawTw)
+                ? $rawTw
+                : (is_string($rawTw) ? (json_decode($rawTw, true) ?? []) : []);
 
-                $firstTime = $tw[0] ?? null;
-                $lastTime  = $tw[7] ?? null;
+            $firstTime = $tw[0] ?? null;
+            $lastTime  = $tw[7] ?? null;
 
-                if ($firstTime && $lastTime) {
-                    $duration = $this->timeToMinutes($lastTime) - $this->timeToMinutes($firstTime);
-                    if ($duration < 0) $duration += 1440;
-                    $scheduleType = $duration >= 720 ? 'Shifting' : 'Normal';
+            if ($firstTime && $lastTime) {
+                $duration = $this->timeToMinutes($lastTime) - $this->timeToMinutes($firstTime);
+                if ($duration < 0) $duration += 1440;
+                
+                // Only classify as Shifting by duration if SHIFT field allows it.
+                // SHIFT = 1 (Normal) must never be reclassified as Shifting,
+                // even when the expected duration is 10+ hours.
+                if ($shiftField !== 1 && $duration >= 720) {
+                    $scheduleType = 'Shifting';
                 }
             }
         }
-
-        return [$tw, $scheduleType];
     }
+
+    // SHIFT = 2 always treated as Shifting regardless of duration
+    if ($shiftField === 2) {
+        $scheduleType = 'Shifting';
+    }
+
+    return [$tw, $scheduleType];
+}
 
     private function resolveShiftMeta(
         $activeSchedule,
@@ -845,21 +860,23 @@ return 'Absent';
     }
 
     private function buildFlattenedSlots(
-        array $actualLogs,
-        array $tw,
-        bool  $noSchedule,
-        bool  $isShifting
-    ): array {
-        $slotDefs = [
-            ['key' => 'time_in',     'twIndex' => 0, 'label' => 'Time In',     'disabled' => false],
-            ['key' => 'break_out_1', 'twIndex' => 1, 'label' => 'Break Out 1', 'disabled' => $noSchedule || $isShifting],
-            ['key' => 'break_in_1',  'twIndex' => 2, 'label' => 'Break In 1',  'disabled' => $noSchedule || $isShifting],
-            ['key' => 'lunch_out',   'twIndex' => 3, 'label' => 'Lunch Out',   'disabled' => $noSchedule],
-            ['key' => 'lunch_in',    'twIndex' => 4, 'label' => 'Lunch In',    'disabled' => $noSchedule],
-            ['key' => 'break_out_2', 'twIndex' => 5, 'label' => 'Break Out 2', 'disabled' => $noSchedule],
-            ['key' => 'break_in_2',  'twIndex' => 6, 'label' => 'Break In 2',  'disabled' => $noSchedule],
-            ['key' => 'time_out',    'twIndex' => 7, 'label' => 'Time Out',    'disabled' => false],
-        ];
+    array $actualLogs,
+    array $tw,
+    bool  $noSchedule,
+    bool  $isShifting,
+    bool  $originallyShifting = false
+): array {
+    $isShifting = $isShifting || $originallyShifting;
+    $slotDefs = [
+        ['key' => 'time_in',     'twIndex' => 0, 'label' => 'Time In',     'disabled' => false],
+        ['key' => 'break_out_1', 'twIndex' => 1, 'label' => 'Break Out 1', 'disabled' => $noSchedule || $isShifting],
+        ['key' => 'break_in_1',  'twIndex' => 2, 'label' => 'Break In 1',  'disabled' => $noSchedule || $isShifting],
+        ['key' => 'lunch_out',   'twIndex' => 3, 'label' => 'Lunch Out',   'disabled' => $noSchedule],
+        ['key' => 'lunch_in',    'twIndex' => 4, 'label' => 'Lunch In',    'disabled' => $noSchedule],
+        ['key' => 'break_out_2', 'twIndex' => 5, 'label' => 'Break Out 2', 'disabled' => $noSchedule],
+        ['key' => 'break_in_2',  'twIndex' => 6, 'label' => 'Break In 2',  'disabled' => $noSchedule],
+        ['key' => 'time_out',    'twIndex' => 7, 'label' => 'Time Out',    'disabled' => false],
+    ];
 
         $flattened = [];
         foreach ($slotDefs as $slot) {
@@ -968,6 +985,57 @@ private function buildObInfo($ob): ?array
         [$h, $m] = explode(':', $time);
         return (int)$h * 60 + (int)$m;
     }
+
+private function effectiveIsShifting(string $scheduleType, array $actualLogs, array $tw = [], string $date = ''): bool
+{
+    $isToday = empty($date) || $date === now()->toDateString();
+
+    $timeIn  = $actualLogs['time_in']  ?? null;
+    $timeOut = $actualLogs['time_out'] ?? null;
+
+    // Compute expected duration from TIME_WINDOWS if available
+    $expectedDuration = null;
+    if (!empty($tw[0]) && !empty($tw[7])) {
+        $expectedIn       = $this->timeToMinutes($tw[0]);
+        $expectedOut      = $this->timeToMinutes($tw[7]);
+        $expectedDuration = $expectedOut - $expectedIn;
+        if ($expectedDuration < 0) $expectedDuration += 1440;
+    }
+
+    // Compute actual duration if both punches exist
+    $actualDuration = null;
+    if ($timeIn && $timeOut && $timeIn !== '--:--' && $timeOut !== '--:--') {
+        $inMins         = $this->timeToMinutes($timeIn);
+        $outMins        = $this->timeToMinutes($timeOut);
+        $actualDuration = $outMins - $inMins;
+        if ($actualDuration < 0) $actualDuration += 1440;
+    }
+
+    // SHIFT = 1 (Normal):
+    // - Current date → always Normal (Break 1 enabled), never override
+    // - Past date    → disable Break 1 only when both expected AND actual
+    //                  durations are 10hrs+ (600 mins)
+    if ($scheduleType !== 'Shifting') {
+        if ($isToday) return false;
+
+        $expectedIsLong = $expectedDuration !== null && $expectedDuration >= 600;
+        $actualIsLong   = $actualDuration   !== null && $actualDuration   >= 600;
+
+        return $expectedIsLong && $actualIsLong;
+    }
+
+    // SHIFT = 2 or duration-promoted Shifting: check for early out
+    if ($actualDuration !== null) {
+        if ($expectedDuration !== null) {
+            // Early out: actual is significantly shorter than expected
+            if ($actualDuration < $expectedDuration - 60) return false;
+        } else {
+            if ($actualDuration < 660) return false;
+        }
+    }
+
+    return true;
+}
 
         /**
      * Get Time In, Time Out, and Shift Type from actual logs for a specific date
@@ -1256,10 +1324,48 @@ private function computeDtrRowsFromData(
             ) continue;
         }
 
-        $tw           = $timeWindowsMap[$employId]  ?? [];
-        $scheduleType = $scheduleTypeMap[$employId] ?? 'Normal';
-        $isShifting   = $scheduleType === 'Shifting';
-        $actualLogs   = $actualLogsMap[$employId]   ?? [];
+        $tw                 = $timeWindowsMap[$employId]  ?? [];
+        $scheduleType       = $scheduleTypeMap[$employId] ?? 'Normal';
+        $actualLogs         = $actualLogsMap[$employId]   ?? [];
+        $originallyShifting = (int) ($activeSchedule->SHIFT ?? 0) === 2;
+        $shiftField         = (int) ($activeSchedule->SHIFT ?? 0);
+
+        if ($isHoliday) {
+            $isShifting = match(true) {
+                $shiftField === 2 => true,
+                $shiftField === 1 => false,
+                default           => $this->effectiveIsShifting($scheduleType, $actualLogs, $tw, $today),
+            };
+        } else {
+            $isShifting = $originallyShifting
+                ? true
+                : $this->effectiveIsShifting($scheduleType, $actualLogs, $tw, $today);
+        }
+
+        // For SHIFT=1 on past dates with 10hr+ expected AND actual duration,
+        // force isShifting=true so buildFlattenedSlots disables Break 1 slots.
+        if (!$isShifting && !$isHoliday && $shiftField === 1 && $today < now()->toDateString()) {
+            $expectedDuration = null;
+            if (!empty($tw[0]) && !empty($tw[7])) {
+                $expectedIn       = $this->timeToMinutes($tw[0]);
+                $expectedOut      = $this->timeToMinutes($tw[7]);
+                $expectedDuration = $expectedOut - $expectedIn;
+                if ($expectedDuration < 0) $expectedDuration += 1440;
+            }
+            $timeIn  = $actualLogs['time_in']  ?? null;
+            $timeOut = $actualLogs['time_out'] ?? null;
+            $actualDuration = null;
+            if ($timeIn && $timeOut && $timeIn !== '--:--' && $timeOut !== '--:--') {
+                $inMins         = $this->timeToMinutes($timeIn);
+                $outMins        = $this->timeToMinutes($timeOut);
+                $actualDuration = $outMins - $inMins;
+                if ($actualDuration < 0) $actualDuration += 1440;
+            }
+            if ($expectedDuration !== null && $expectedDuration >= 600
+                && $actualDuration  !== null && $actualDuration  >= 600) {
+                $isShifting = true;
+            }
+        }
 
         [$shiftType, $shiftCode, $isRestDay] = $this->resolveShiftMeta(
             $activeSchedule, $tw, $actualLogs, $todayCarbon
@@ -1285,7 +1391,7 @@ private function computeDtrRowsFromData(
         $missingTimeIn  = $isPresent && !$this->hasTimeIn($actualLogs);
         $missingTimeOut = $isPresent && !$this->hasTimeOut($actualLogs);
 
-        $flattened = $this->buildFlattenedSlots($actualLogs, $tw, false, $isShifting);
+        $flattened = $this->buildFlattenedSlots($actualLogs, $tw, false, $isShifting, $originallyShifting);
 
         $rows[] = [
             'EMPLOYID'          => $employId,
@@ -1293,6 +1399,7 @@ private function computeDtrRowsFromData(
             'SHIFTCODE'         => $shiftCode,
             'SHIFT_TYPE'        => $shiftType,
             'SCHEDULE_TYPE'     => $scheduleType,
+            'IS_SHIFTING'       => $isShifting,
             'HAS_SCHEDULE'      => true,
             'IS_REST_DAY'       => $isRestDay,
             'IS_HOLIDAY'        => $isHoliday,
@@ -1880,6 +1987,186 @@ private function getDatesForCutoff(string $cutoff): array
         $dates[] = $d->toDateString();
     }
     return $dates;
+}
+
+public function getDtrRowsForEmployee(
+    string $employId,
+    string $startDate,
+    string $endDate,
+    int    $page         = 1,
+    int    $perPage      = 25,
+    string $shiftFilter  = '',
+    string $statusFilter = ''
+): array {
+    $rows = [];
+
+    // iterate each day in the range
+    $current = Carbon::parse($startDate);
+    $end     = Carbon::parse($endDate);
+
+    while ($current->lte($end)) {
+        $date        = $current->toDateString();
+        $todayCarbon = $current->copy();
+
+        // Get active schedule for this date
+        $activeSchedule = $this->employeeRepo
+            ->getActiveSchedules([$employId], $date)
+            ->keyBy('EMPID')
+            ->get($employId);
+
+        $tw           = [];
+        $scheduleType = 'Normal';
+        $isShifting   = false;
+
+        if ($activeSchedule) {
+            [$tw, $scheduleType] = $this->resolveTimeWindowsAndType($activeSchedule, $todayCarbon);
+        }
+
+        $timeWindowsMap  = [$employId => $tw];
+        $scheduleTypeMap = [$employId => $scheduleType];
+
+        $actualLogsMap = $this->dtrLogService->resolveLogsForEmployees(
+            [$employId], $timeWindowsMap, $scheduleTypeMap, $date
+        );
+
+       $actualLogs         = $actualLogsMap[$employId] ?? [];
+        $originallyShifting = (int) ($activeSchedule->SHIFT ?? 0) === 2;
+        $shiftField         = (int) ($activeSchedule->SHIFT ?? 0);
+
+        // Holiday check — must come before shifting logic
+        $holiday   = $this->getTodayHoliday($date);
+        $isHoliday = $holiday !== null;
+
+        // Leave check
+        $approvedLeaves = $this->employeeRepo->getApprovedLeaves([$employId], $date);
+        $isOnLeave      = isset($approvedLeaves[$employId]);
+
+        // OB check
+        $approvedObs = $this->employeeRepo->getApprovedObs([$employId], $date);
+        $obRecord    = $approvedObs->get((string) $employId);
+        $obInfo      = $obRecord ? $this->buildObInfo($obRecord) : null;
+
+        if ($isHoliday) {
+            $isShifting = match(true) {
+                $shiftField === 2 => true,
+                $shiftField === 1 => false,
+                default           => $this->effectiveIsShifting($scheduleType, $actualLogs, $tw, $date),
+            };
+        } else {
+            $isShifting = $originallyShifting
+                ? true
+                : $this->effectiveIsShifting($scheduleType, $actualLogs, $tw, $date);
+        }
+
+        // For SHIFT=1 on past dates with 10hr+ expected AND actual duration,
+        // force isShifting=true so buildFlattenedSlots disables Break 1 slots.
+        if (!$isShifting && !$isHoliday && $shiftField === 1 && $date < now()->toDateString()) {
+            $expectedDuration = null;
+            if (!empty($tw[0]) && !empty($tw[7])) {
+                $expectedIn       = $this->timeToMinutes($tw[0]);
+                $expectedOut      = $this->timeToMinutes($tw[7]);
+                $expectedDuration = $expectedOut - $expectedIn;
+                if ($expectedDuration < 0) $expectedDuration += 1440;
+            }
+            $timeIn  = $actualLogs['time_in']  ?? null;
+            $timeOut = $actualLogs['time_out'] ?? null;
+            $actualDuration = null;
+            if ($timeIn && $timeOut && $timeIn !== '--:--' && $timeOut !== '--:--') {
+                $inMins         = $this->timeToMinutes($timeIn);
+                $outMins        = $this->timeToMinutes($timeOut);
+                $actualDuration = $outMins - $inMins;
+                if ($actualDuration < 0) $actualDuration += 1440;
+            }
+            if ($expectedDuration !== null && $expectedDuration >= 600
+                && $actualDuration  !== null && $actualDuration  >= 600) {
+                $isShifting = true;
+            }
+        }
+
+        $isRestDay        = false;
+        $shiftType        = 'N/A';
+        $shiftCode        = 'N/A';
+        $effectiveRestDay = $isHoliday;
+
+        if ($activeSchedule) {
+            [$shiftType, $shiftCode, $isRestDay] = $this->resolveShiftMeta(
+                $activeSchedule, $tw, $actualLogs, $todayCarbon
+            );
+            $effectiveRestDay = $isRestDay || $isHoliday;
+        }
+
+        $expectedTimeIn  = $tw[0] ?? null;
+        $expectedTimeOut = $tw[7] ?? null;
+        $hasAnyPunch     = $this->hasAnyPunch($actualLogs);
+        $isUnscheduledRD = ($effectiveRestDay || $isOnLeave) && $hasAnyPunch;
+
+        $remarks = $this->resolveRemarks(
+            $actualLogs, $effectiveRestDay, $isOnLeave,
+            $expectedTimeIn, $activeSchedule !== null,
+            $date, $isHoliday, $obInfo, $expectedTimeOut
+        );
+
+        $isPresent      = in_array($remarks, ['Present', 'Late', 'On Leave (Present)']);
+        $missingTimeIn  = $isPresent && !$this->hasTimeIn($actualLogs);
+        $missingTimeOut = $isPresent && !$this->hasTimeOut($actualLogs);
+
+        $flattened = $this->buildFlattenedSlots(
+            $actualLogs, $tw, $activeSchedule === null, $isShifting, $originallyShifting
+        );
+        $rows[] = [
+            'DATE'              => $date,
+            'EMPLOYID'          => $employId,
+            'SHIFTCODE'         => $shiftCode,
+            'SHIFT_TYPE'        => $shiftType,
+            'SCHEDULE_TYPE'     => $scheduleType,
+            'IS_SHIFTING'       => $isShifting,
+            'HAS_SCHEDULE'      => $activeSchedule !== null,
+            'IS_REST_DAY'       => $isRestDay,
+            'IS_HOLIDAY'        => $isHoliday,
+            'HOLIDAY_NAME'      => $holiday['name'] ?? null,
+            'IS_UNSCHEDULED_RD' => $isUnscheduledRD,
+            'REMARKS'           => $remarks,
+            'MISSING_TIME_IN'   => $missingTimeIn,
+            'MISSING_TIME_OUT'  => $missingTimeOut,
+            'OB_INFO'           => $obInfo,
+            ...$flattened,
+        ];
+
+        $current->addDay();
+    }
+
+    // Shift filter
+    if (!empty($shiftFilter)) {
+        $rows = array_values(array_filter($rows, fn($row) => match ($shiftFilter) {
+            'Day Shift'   => str_contains($row['SHIFT_TYPE'], 'Day'),
+            'Night Shift' => str_contains($row['SHIFT_TYPE'], 'Night'),
+            default       => true,
+        }));
+    }
+
+    // Status filter
+    if (!empty($statusFilter)) {
+        $rows = array_values(array_filter($rows, fn($row) => match ($statusFilter) {
+            'On Leave' => in_array($row['REMARKS'], ['On Leave', 'On Leave (Present)']),
+            default    => $row['REMARKS'] === $statusFilter,
+        }));
+    }
+
+    // Sort descending (most recent first)
+    usort($rows, fn($a, $b) => strcmp($b['DATE'], $a['DATE']));
+
+    $total    = count($rows);
+    $lastPage = max(1, (int) ceil($total / $perPage));
+    $page     = min($page, $lastPage);
+    $paged    = array_slice($rows, ($page - 1) * $perPage, $perPage);
+
+    return [
+        'rows'         => $paged,
+        'total'        => $total,
+        'per_page'     => $perPage,
+        'current_page' => $page,
+        'last_page'    => $lastPage,
+    ];
 }
 
 }

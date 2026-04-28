@@ -82,6 +82,10 @@ class DtrLogService
             $logsForDate = $this->filterLogsForDate($empLogs, $today, $isNightShift, $tw);
             $logsForDate = $this->deduplicateLogs($logsForDate, $isNightShift);
 
+            $originallyShifting = $scheduleType === 'Shifting';
+            $isShifting = $this->effectiveIsShifting($isShifting, $logsForDate, $isNightShift, $tw, $originallyShifting, $today);
+
+
             $result[$employId] = $this->assignPunches($tw, $logsForDate, $isNightShift, $isShifting);
         }
 
@@ -165,6 +169,9 @@ class DtrLogService
         $logsForDate = $this->filterLogsForDate($empLogs, $date, $isNightShift, $tw);
         $logsForDate = $this->deduplicateLogs($logsForDate, $isNightShift);
 
+        $originallyShifting = $scheduleType === 'Shifting';
+        $isShifting = $this->effectiveIsShifting($isShifting, $logsForDate, $isNightShift, $tw, $originallyShifting, $date);
+
         $result[$employId] = $this->assignPunches($tw, $logsForDate, $isNightShift, $isShifting);
     }
 
@@ -196,6 +203,9 @@ public function resolveLogsFromPreNormalized(
 
         $logsForDate = $this->filterLogsForDateFast($empLogs, $date, $isNightShift, $tw);
         $logsForDate = $this->deduplicateLogs($logsForDate, $isNightShift);
+
+        $originallyShifting = $scheduleType === 'Shifting';
+        $isShifting = $this->effectiveIsShifting($isShifting, $logsForDate, $isNightShift, $tw, $originallyShifting, $date);
 
         $result[$employId] = $this->assignPunches($tw, $logsForDate, $isNightShift, $isShifting);
     }
@@ -243,12 +253,12 @@ private function filterLogsForDateFast(
         if ($prevDayWasRestDay) {
     // Shift started yesterday — logs belong to yesterday, not today.
     return [];
-} else {
-    $startHour   = max(0, $shiftStartHour - 2);
-    $windowStart = $date     . ' ' . $padMin($startHour) . ':' . $m . ':00';
-    $windowEnd   = $tomorrow . ' 13:59:59';
-    $anchorDate  = $date;
-}
+    } else {
+        $startHour   = max(0, $shiftStartHour - 2);
+        $windowStart = $date     . ' ' . $padMin($startHour) . ':' . $m . ':00';
+        $windowEnd   = $tomorrow . ' 13:59:59';
+        $anchorDate  = $date;
+    }
 
         $logsInWindow = array_values(array_filter(
             $logs,
@@ -990,20 +1000,92 @@ private function distributeBreaks(
         return false;
     }
 
-    /**
-     * Return an empty slots array with all 8 slots initialised to null.
-     */
-    private function emptySlots(): array
-    {
-        return [
-            'time_in'     => null,
-            'break_out_1' => null,
-            'break_in_1'  => null,
-            'lunch_out'   => null,
-            'lunch_in'    => null,
-            'break_out_2' => null,
-            'break_in_2'  => null,
-            'time_out'    => null,
-        ];
+private function effectiveIsShifting(
+    bool  $isShifting,
+    array $logs,
+    bool  $isNightShift,
+    array $tw = [],
+    bool  $originallyShifting = false,
+    string $date = ''
+): bool {
+    if (!$isShifting) {
+        // SHIFT = 1 (Normal): on past dates, disable Break 1 when both
+        // expected AND actual durations are 10hrs+ (600 mins).
+        // On today, always keep Break 1 enabled.
+        $isToday = empty($date) || $date === now()->toDateString();
+        if ($isToday) return false;
+
+        $expectedDuration = null;
+        if (!empty($tw[0]) && !empty($tw[7])) {
+            $expectedIn       = $this->toAbsMin($tw[0], $isNightShift);
+            $expectedOut      = $this->toAbsMin($tw[7], $isNightShift);
+            $expectedDuration = $expectedOut - $expectedIn;
+            if ($expectedDuration < 0) $expectedDuration += 1440;
+        }
+
+        $checkIn  = null;
+        $checkOut = null;
+        foreach ($logs as $log) {
+            if ($log['type'] === 'check_in'  && $checkIn  === null) $checkIn  = $log['time'];
+            if ($log['type'] === 'check_out')                       $checkOut = $log['time'];
+        }
+
+        $actualDuration = null;
+        if ($checkIn && $checkOut) {
+            $inMins         = $this->toAbsMin($checkIn,  $isNightShift);
+            $outMins        = $this->toAbsMin($checkOut, $isNightShift);
+            $actualDuration = $outMins - $inMins;
+            if ($actualDuration < 0) $actualDuration += 1440;
+        }
+
+        return ($expectedDuration !== null && $expectedDuration >= 600)
+            && ($actualDuration   !== null && $actualDuration   >= 600);
     }
+
+    $checkIn  = null;
+    $checkOut = null;
+    foreach ($logs as $log) {
+        if ($log['type'] === 'check_in'  && $checkIn  === null) $checkIn  = $log['time'];
+        if ($log['type'] === 'check_out')                       $checkOut = $log['time'];
+    }
+
+    if ($checkIn && $checkOut) {
+        $inMins   = $this->toAbsMin($checkIn,  $isNightShift);
+        $outMins  = $this->toAbsMin($checkOut, $isNightShift);
+        $duration = $outMins - $inMins;
+        if ($duration < 0) $duration += 1440;
+
+        if (!empty($tw[0]) && !empty($tw[7])) {
+            $expectedIn       = $this->toAbsMin($tw[0], $isNightShift);
+            $expectedOut      = $this->toAbsMin($tw[7], $isNightShift);
+            $expectedDuration = $expectedOut - $expectedIn;
+            if ($expectedDuration < 0) $expectedDuration += 1440;
+
+            if ($duration < $expectedDuration - 60) {
+                if ($originallyShifting) return true;
+                return false;
+            }
+        } else {
+            if ($duration < 660) {
+                if ($originallyShifting) return true;
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+private function emptySlots(): array
+{
+    return [
+        'time_in'     => null,
+        'break_out_1' => null,
+        'break_in_1'  => null,
+        'lunch_out'   => null,
+        'lunch_in'    => null,
+        'break_out_2' => null,
+        'break_in_2'  => null,
+        'time_out'    => null,
+    ];
+}
 }

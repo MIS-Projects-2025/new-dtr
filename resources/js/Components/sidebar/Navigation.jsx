@@ -24,7 +24,7 @@ export default function NavLinks({ isSidebarOpen }) {
                 isSidebarOpen={isSidebarOpen}
             />
             <SidebarLink
-                href={route("daily-time-record.index")}
+                href={route("dtr.index")}
                 icon={<CalendarDays size={20} />}
                 label="Daily Time Record"
                 isSidebarOpen={isSidebarOpen}

@@ -626,7 +626,7 @@ const getBreakInStatus = (actualIn, actualOut, allowedMinutes, isToday, nowMins,
 const TIME_CELL_CLS = {
     'on-time':    'bg-green-100 dark:bg-green-900/40 text-green-800 dark:text-green-300',
     'late':       'bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300',
-    'early-out':  'bg-red-100   dark:bg-red-900/40   text-red-800   dark:text-red-300',
+    'early-out':  'bg-green-100 dark:bg-green-900/40 text-green-800 dark:text-green-300', // ← changed
     'over-break': 'bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300',
     'missing':    'bg-red-100   dark:bg-red-900/40   text-red-800   dark:text-red-300',
     'rest-day':   'bg-zinc-100  dark:bg-zinc-700/60  text-zinc-400  dark:text-zinc-500',
@@ -726,8 +726,13 @@ const DailyTimeRecord = ({ rows = [], meta, page, onPageChange, loading, searchI
                                 <td className="px-2 py-1.5 truncate">{row.SHIFTCODE}</td>
                                 <td className="px-2 py-1.5 truncate">{row.SHIFT_TYPE}</td>
                                 {(() => {
-                                    const isShifting = row.SCHEDULE_TYPE === 'Shifting';
-                                    const break2Mins = isShifting ? 30 : 15;
+                                    const isOriginallyShifting  = row.SCHEDULE_TYPE === 'Shifting';
+                                    const isShifting            = row.IS_SHIFTING ?? isOriginallyShifting;
+                                    const wasEarlyOutOverride   = isOriginallyShifting && !isShifting;
+                                    const effectiveTimeOutExpected = wasEarlyOutOverride
+                                    ? row['Time Out (actual)']
+                                    : row['Time Out (expected)'];
+                                    const break2Mins            = isShifting ? 30 : 15;
                                     const hasNoLogs  = !toMins(row['Time In (actual)'])
                                                     && !toMins(row['Time Out (actual)'])
                                                     && !toMins(row['Break Out 1 (actual)'])
@@ -763,13 +768,15 @@ const DailyTimeRecord = ({ rows = [], meta, page, onPageChange, loading, searchI
                                         return sMins <= obTo && eMins >= obFrom;
                                     };
 
+                                    const isHolidayNoLog = row.IS_HOLIDAY && hasNoLogs;
+
                                     const cls = (status, forceStatus, slotStart, slotEnd) => {
                                         if (isRestDayNoLog) return TIME_CELL_CLS['rest-day'];
+                                        if (forceStatus === 'rest-day') return TIME_CELL_CLS['rest-day']; // disabled slots always gray
+                                        if (isHolidayNoLog) return TIME_CELL_CLS['pending'];              // holiday + no logs = blue
                                         if (forceStatus)    return TIME_CELL_CLS[forceStatus];
                                         if (isOnLeaveNoLog) return TIME_CELL_CLS['pending'];
-                                        if (obInfo && isObCovered(slotStart, slotEnd)) {
-                                            return TIME_CELL_CLS['ob'];
-                                        }
+                                        if (obInfo && isObCovered(slotStart, slotEnd)) return TIME_CELL_CLS['ob'];
                                         return TIME_CELL_CLS[status] ?? '';
                                     };
 
@@ -804,7 +811,7 @@ const DailyTimeRecord = ({ rows = [], meta, page, onPageChange, loading, searchI
                                                 {row['Break In 2 (actual)'] ?? '--'}
                                             </td>
                                             {/* Time Out */}
-                                            <td className={`px-2 py-1.5 truncate ${cls(getTimeStatus(row['Time Out (actual)'], row['Time Out (expected)'], 'out', isToday, nowMins, nightShiftNextDayPending), undefined, row['Time Out (expected)'], row['Time Out (expected)'])}`}>
+                                            <td className={`px-2 py-1.5 truncate ${cls(getTimeStatus(row['Time Out (actual)'], effectiveTimeOutExpected, 'out', isToday, nowMins, nightShiftNextDayPending), undefined, effectiveTimeOutExpected, effectiveTimeOutExpected)}`}>
                                                 {row['Time Out (actual)'] ?? '--'}
                                             </td>
                                         </>
