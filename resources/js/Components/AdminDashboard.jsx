@@ -260,7 +260,10 @@ const DoughnutChart = ({ stats, loading }) => {
 // Attendance Analytics component (empty for now)
 const AttendanceAnalytics = ({ analyticsStats = null, analyticsLoading = false, selectedDate = '', onParamsChange }) => {
     const [viewMode, setViewMode] = useState('Daily');
-    const [dailyDate, setDailyDate] = useState(() => new Date().toISOString().split('T')[0]);
+    const [dailyDate, setDailyDate] = useState(() => {
+    const d = new Date();
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    });
     const [selectedMonth, setSelectedMonth] = useState(() => {
     const now = new Date();
         return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
@@ -569,10 +572,9 @@ const getTimeStatus = (actual, expected, type = 'in', isToday = false, nowMins =
     const a = toMins(actual);
     const e = toMins(expected);
     if (a === null && e !== null) {
-        // Night shift next-day slot (e < 720 = before noon = past midnight):
-        // always pending because tomorrow hasn't come yet
         if (nightShiftNextDayPending && e < 720) return 'pending';
         if (isToday && nowMins < e) return 'pending';
+        if (isToday && nowMins >= e) return 'missing';
         return 'missing';
     }
     if (a === null || e === null) return 'neutral';
@@ -587,9 +589,9 @@ const getBreakOutStatus = (actual, expected, isToday, nowMins, nightShiftNextDay
     const a = toMins(actual);
     const e = toMins(expected);
     if (a === null && e !== null) {
-        // Night shift next-day slot: always pending because tomorrow hasn't come yet
         if (nightShiftNextDayPending && e < 720) return 'pending';
         if (isToday && nowMins < e) return 'pending';
+        if (isToday && nowMins >= e) return 'missing';
         return 'missing';
     }
     if (a !== null) return 'on-time';
@@ -600,24 +602,21 @@ const getBreakInStatus = (actualIn, actualOut, allowedMinutes, isToday, nowMins,
     const inMins       = toMins(actualIn);
     const outMins      = toMins(actualOut);
     const expectedMins = toMins(expectedOut);
-
     if (outMins === null) {
         if (expectedMins !== null) {
-            // Night shift next-day slot: always pending because tomorrow hasn't come yet
             if (nightShiftNextDayPending && expectedMins < 720) return 'pending';
             if (isToday && nowMins < expectedMins + allowedMinutes) return 'pending';
-            if (!isToday || nowMins >= expectedMins + allowedMinutes) return 'missing';
+            if (isToday && nowMins >= expectedMins + allowedMinutes) return 'missing';
+            return 'missing';
         }
         return 'neutral';
     }
-
     if (inMins === null) {
-        // Night shift next-day slot: always pending because tomorrow hasn't come yet
         if (nightShiftNextDayPending && outMins < 720) return 'pending';
         if (isToday && nowMins < outMins + allowedMinutes) return 'pending';
+        if (isToday && nowMins >= outMins + allowedMinutes) return 'missing';
         return 'missing';
     }
-
     let duration = inMins - outMins;
     if (duration < 0) duration += 1440;
     return duration > allowedMinutes ? 'over-break' : 'on-time';
@@ -741,8 +740,8 @@ const DailyTimeRecord = ({ rows = [], meta, page, onPageChange, loading, searchI
                                     const isRestDayNoLog = row.IS_REST_DAY && hasNoLogs;
                                     const isOnLeaveNoLog = row.REMARKS === 'On Leave' && hasNoLogs;
                                     const obInfo         = row.OB_INFO ?? null;
-                                    const today        = new Date().toISOString().split('T')[0];
-                                    const tomorrow     = new Date(Date.now() + 86400000).toISOString().split('T')[0];
+                                    const today = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; })();
+                                    const tomorrow = (() => { const d = new Date(Date.now() + 86400000); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; })();
                                     const isToday      = selectedDate === today;
                                     const isNightShift = row.SHIFT_TYPE === 'Night Shift';
                                     const now          = new Date();
@@ -891,7 +890,10 @@ export default function AdminDashboard({ emp_data }) {
 
     const [filters, setFilters] = useState({ company: '', prodline: '', department: '', station: '' });
     const [filterOptions, setFilterOptions] = useState({ companies: [], prodlines: [], departments: [], stations: [] });
-    const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().split('T')[0]);
+    const [selectedDate, setSelectedDate] = useState(() => {
+    const d = new Date();
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    });
     const [dtrRows, setDtrRows] = useState([]);
     const [dtrPage, setDtrPage] = useState(1);
     const [dtrMeta, setDtrMeta] = useState({ total: 0, last_page: 1, per_page: 15 });
@@ -969,9 +971,10 @@ useEffect(() => {
     const now = new Date();
     const y = now.getFullYear();
     const m = String(now.getMonth() + 1).padStart(2, '0');
+    const d = String(now.getDate()).padStart(2, '0');
         return {
             mode: 'Daily',
-            date: now.toISOString().split('T')[0],
+            date: `${y}-${m}-${d}`,
             cutoff: `first-${y}-${m}`,
             month: `${y}-${m}`,
         };
