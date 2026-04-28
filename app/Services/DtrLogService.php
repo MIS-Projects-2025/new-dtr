@@ -241,16 +241,14 @@ private function filterLogsForDateFast(
         $prevDayWasRestDay = $hasPrevEveningCheckIn && !$hasPrevOrEarlyCheckOut && !$hasTodayEveningIn;
 
         if ($prevDayWasRestDay) {
-            $startHour   = max(0, $shiftStartHour - 2);
-            $windowStart = $yesterday . ' ' . $padMin($startHour) . ':' . $m . ':00';
-            $windowEnd   = $date      . ' 13:59:59';
-            $anchorDate  = $yesterday;
-        } else {
-            $startHour   = max(0, $shiftStartHour - 2);
-            $windowStart = $date     . ' ' . $padMin($startHour) . ':' . $m . ':00';
-            $windowEnd   = $tomorrow . ' 13:59:59';
-            $anchorDate  = $date;
-        }
+    // Shift started yesterday — logs belong to yesterday, not today.
+    return [];
+} else {
+    $startHour   = max(0, $shiftStartHour - 2);
+    $windowStart = $date     . ' ' . $padMin($startHour) . ':' . $m . ':00';
+    $windowEnd   = $tomorrow . ' 13:59:59';
+    $anchorDate  = $date;
+}
 
         $logsInWindow = array_values(array_filter(
             $logs,
@@ -501,8 +499,9 @@ $prevDayWasRestDay = $hasPrevEveningCheckIn
     && !$hasTodayEveningIn;
 
         if ($prevDayWasRestDay) {
-            $windowStart = $yesterday->copy()->setTime((int)$h, (int)$m)->subHours(2);
-            $windowEnd   = $base->copy()->setTime(13, 59);
+            // The shift started yesterday — these logs belong to yesterday's date,
+            // not today's. Return empty so they don't show under today.
+            return [];
         } else {
             $windowStart = $base->copy()->setTime((int)$h, (int)$m)->subHours(2);
             $windowEnd   = $tomorrow->copy()->setTime(13, 59);

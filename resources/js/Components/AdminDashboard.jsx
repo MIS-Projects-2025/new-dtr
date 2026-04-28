@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, Fragment } from "react";
 import { usePage } from "@inertiajs/react"; 
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
 
 const COL_HEADERS = ["Expected", "Present", "%", "Absent", "%"];
 
@@ -186,6 +187,76 @@ const UnscheduledEmployeeList = ({ employees = [], loading = false, holiday = nu
     </div>
 );
 
+const DoughnutChart = ({ stats, loading }) => {
+    const data = [
+        { name: 'Present',            value: stats?.present             ?? 0, color: '#22c55e' },
+        { name: 'Absent',             value: stats?.absent              ?? 0, color: '#ef4444' },
+        { name: 'Rest Day',           value: stats?.rest_day            ?? 0, color: '#a1a1aa' },
+        { name: 'Unsched. Present',   value: stats?.unscheduled_present ?? 0, color: '#a855f7' },
+        { name: 'Unsched. Absent',    value: stats?.unscheduled_absent  ?? 0, color: '#f59e0b' },
+    ].filter(d => d.value > 0);
+
+    if (loading) {
+        return (
+            <div className="flex items-center justify-center w-full h-full text-[9px] text-zinc-400">
+                Loading...
+            </div>
+        );
+    }
+
+    if (data.length === 0) {
+        return (
+            <div className="flex items-center justify-center w-full h-full text-[9px] text-zinc-400">
+                No data
+            </div>
+        );
+    }
+
+    const CustomTooltip = ({ active, payload }) => {
+    if (!active || !payload?.length) return null;
+    const { name, value } = payload[0].payload;
+    const pct = total > 0 ? ((value / total) * 100).toFixed(2) : 0;
+    return (
+        <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-2.5 py-1.5 shadow-sm text-[10px]">
+            <p className="font-medium text-zinc-700 dark:text-zinc-200">{name}</p>
+            <p className="text-zinc-500 dark:text-zinc-400">{pct}%</p>
+        </div>
+    );
+};
+
+    const total = data.reduce((sum, d) => sum + d.value, 0);
+
+    return (
+        <div className="relative w-full h-full flex items-center justify-center" style={{ maxWidth: '160px', maxHeight: '160px', margin: '0 auto' }}>
+            <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                    <Pie
+                        data={data}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius="55%"
+                        outerRadius="80%"
+                        paddingAngle={2}
+                        dataKey="value"
+                        strokeWidth={0}
+                    >
+                        {data.map((entry, index) => (
+                            <Cell key={`cell-${index}`} fill={entry.color} />
+                        ))}
+                    </Pie>
+                    <Tooltip content={<CustomTooltip />} />
+                </PieChart>
+            </ResponsiveContainer>
+
+            {/* Center total */}
+            <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                <span className="text-[16px] font-semibold text-zinc-800 dark:text-zinc-100 leading-none">{total}</span>
+                <span className="text-[8px] text-zinc-400 dark:text-zinc-500 mt-0.5">total</span>
+            </div>
+        </div>
+    );
+};
+
 // Attendance Analytics component (empty for now)
 const AttendanceAnalytics = ({ analyticsStats = null, analyticsLoading = false, selectedDate = '', onParamsChange }) => {
     const [viewMode, setViewMode] = useState('Daily');
@@ -220,7 +291,13 @@ useEffect(() => {
 
 const handleViewModeChange = (mode) => {
     setViewMode(mode);
-    setAnalyticsParams(prev => ({ ...prev, mode }));
+    setAnalyticsParams(prev => ({
+        ...prev,
+        mode,
+        date:   mode === 'Daily'       ? dailyDate      : prev.date,
+        cutoff: mode === 'Per Cut Off' ? selectedCutoff : prev.cutoff,
+        month:  mode === 'Monthly'     ? selectedMonth  : prev.month,
+    }));
 };
 
 const handleDailyDateChange = (date) => {
@@ -314,6 +391,54 @@ const monthOptions = (() => {
     }
     return options;
 })();
+// ── Period progress helpers ───────────────────────────────────────────
+    const addDays = (dateStr, n) => {
+        const d = new Date(dateStr);
+        d.setDate(d.getDate() + n);
+        return d.toISOString().split('T')[0];
+    };
+    const getPeriodRange = () => {
+        if (viewMode === 'Per Cut Off' && selectedCutoff) {
+            const parts = selectedCutoff.split('-');
+            const period = parts[0], y = +parts[1], mo = +parts[2];
+            if (period === 'first') {
+                return {
+                    start: `${y}-${String(mo).padStart(2, '0')}-07`,
+                    end:   `${y}-${String(mo).padStart(2, '0')}-21`,
+                };
+            } else {
+                const nm = mo === 12 ? 1 : mo + 1;
+                const ny = mo === 12 ? y + 1 : y;
+                return {
+                    start: `${y}-${String(mo).padStart(2, '0')}-22`,
+                    end:   `${ny}-${String(nm).padStart(2, '0')}-06`,
+                };
+            }
+        }
+        if (viewMode === 'Monthly' && selectedMonth) {
+            const [y, m] = selectedMonth.split('-').map(Number);
+            const lastDay = new Date(y, m, 0).getDate();
+            return {
+                start: `${y}-${String(m).padStart(2, '0')}-01`,
+                end:   `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`,
+            };
+        }
+        return null;
+    };
+    const fmtDate  = (str) => { const [y,m,d] = str.split('-'); return new Date(+y,+m-1,+d).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}); };
+    const fmtShort = (str) => { const [y,m,d] = str.split('-'); return new Date(+y,+m-1,+d).toLocaleDateString('en-US',{month:'short',day:'numeric'}); };
+
+    const periodRange = getPeriodRange();
+    const today       = new Date().toISOString().split('T')[0];
+    const periodDays  = periodRange
+        ? (() => { const days = []; let cur = periodRange.start; while (cur <= periodRange.end) { days.push(cur); cur = addDays(cur, 1); } return days; })()
+        : [];
+    const countedDays = periodDays.filter(d => d <= today);
+    const totalDays   = periodDays.length;
+    const counted     = countedDays.length;
+    const pct         = totalDays > 0 ? Math.round((counted / totalDays) * 100) : 0;
+    const isComplete  = periodRange && periodRange.end < today;
+    const isFuture    = periodRange && periodRange.start > today;
 
     return (
         <div className="flex flex-col rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-sm overflow-hidden h-full min-h-0">
@@ -376,9 +501,11 @@ const monthOptions = (() => {
     </div>
 </div>
 
-            {/* Body */}
-            <div className="flex-1 flex min-h-0 overflow-auto">
-                <div className="flex flex-col gap-1.5 p-3 overflow-auto border-r border-zinc-200 dark:border-zinc-700" style={{ width: '40%' }}>
+            {/* Body — stats left, radar + progress right */}
+            <div className="flex-1 flex min-h-0 overflow-hidden">
+
+                {/* LEFT: Stats list */}
+                <div className="flex flex-col gap-1.5 p-3 border-r border-zinc-100 dark:border-zinc-800 flex-shrink-0 overflow-auto" style={{ width: '45%' }}>
                     {analyticsLoading ? (
                         <div className="flex items-center justify-center h-full text-[9px] text-zinc-400">Loading...</div>
                     ) : stats.map(({ label, value, color, dot }) => (
@@ -390,6 +517,42 @@ const monthOptions = (() => {
                             <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${color}`}>{value}</span>
                         </div>
                     ))}
+                </div>
+
+                {/* RIGHT: Radar chart + progress bar */}
+                <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+
+                    {/* Radar chart */}
+                    <div className="flex-1 flex items-center justify-center p-2 min-h-0">
+                        <DoughnutChart stats={analyticsStats} loading={analyticsLoading} />
+                    </div>
+
+                    {/* Progress bar — only for Per Cut Off and Monthly */}
+                    {(viewMode === 'Per Cut Off' || viewMode === 'Monthly') && periodRange && (
+                        <div className="mx-2 mb-2 rounded-lg border border-zinc-100 dark:border-zinc-800 p-2 flex flex-col gap-1.5 flex-shrink-0">
+
+                            <div className="flex items-center justify-between">
+                                <span className="text-[9px] font-medium text-zinc-500 dark:text-zinc-400">
+                                    {isComplete ? 'Period complete' : isFuture ? 'Period not started' : 'Period progress'}
+                                </span>
+                                <span className="text-[9px] font-semibold text-zinc-700 dark:text-zinc-200">
+                                    {counted} / {totalDays} days
+                                </span>
+                            </div>
+
+                            <div className="h-1.5 rounded-full bg-zinc-100 dark:bg-zinc-700 overflow-hidden">
+                                <div
+                                    className="h-full rounded-full bg-zinc-700 dark:bg-zinc-300 transition-all duration-300"
+                                    style={{ width: `${pct}%` }}
+                                />
+                            </div>
+
+                            <div className="flex items-center justify-between">
+                                <span className="text-[8px] text-zinc-400 dark:text-zinc-500">{fmtDate(periodRange.start)}</span>
+                                <span className="text-[8px] text-zinc-400 dark:text-zinc-500">{fmtDate(periodRange.end)}</span>
+                            </div>
+                        </div>
+                    )}
                 </div>
             </div>
         </div>
@@ -795,11 +958,16 @@ useEffect(() => {
     const [countsLoading, setCountsLoading] = useState(false);
     const [analyticsStats, setAnalyticsStats] = useState(null);
     const [analyticsLoading, setAnalyticsLoading] = useState(false);
-    const [analyticsParams, setAnalyticsParams] = useState({
-        mode: 'Daily',
-        date: new Date().toISOString().split('T')[0],
-        cutoff: '',
-        month: `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`,
+    const [analyticsParams, setAnalyticsParams] = useState(() => {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+        return {
+            mode: 'Daily',
+            date: now.toISOString().split('T')[0],
+            cutoff: `first-${y}-${m}`,
+            month: `${y}-${m}`,
+        };
     });
     const analyticsAbortRef = useRef(null);
     const analyticsTimeoutRef = useRef(null);
@@ -982,10 +1150,8 @@ const handleFilterChange = (key, value) => {
                                     scheduled_expected:      shiftCounts.day_expected,
                                     scheduled_present:       shiftCounts.day_present,
                                     scheduled_present_pct:   shiftCounts.day_present_pct,
-                                    scheduled_absent:        shiftCounts.day_expected - shiftCounts.day_present,
-                                    scheduled_absent_pct:    shiftCounts.day_expected > 0
-                                        ? Math.round(((shiftCounts.day_expected - shiftCounts.day_present) / shiftCounts.day_expected) * 100 * 10) / 10
-                                        : 0,
+                                    scheduled_absent:        shiftCounts.day_total_absent,
+                                    scheduled_absent_pct:    shiftCounts.day_total_absent_pct,
                                     unscheduled_expected:    shiftCounts.day_unscheduled_rd,
                                     unscheduled_present:     shiftCounts.day_unscheduled_rd_present,
                                     unscheduled_present_pct: shiftCounts.day_unscheduled_rd_pct,
@@ -1006,10 +1172,8 @@ const handleFilterChange = (key, value) => {
                                     scheduled_expected:      shiftCounts.night_expected,
                                     scheduled_present:       shiftCounts.night_present,
                                     scheduled_present_pct:   shiftCounts.night_present_pct,
-                                    scheduled_absent:        shiftCounts.night_expected - shiftCounts.night_present,
-                                    scheduled_absent_pct:    shiftCounts.night_expected > 0
-                                        ? Math.round(((shiftCounts.night_expected - shiftCounts.night_present) / shiftCounts.night_expected) * 100 * 10) / 10
-                                        : 0,
+                                    scheduled_absent:        shiftCounts.night_total_absent,
+                                    scheduled_absent_pct:    shiftCounts.night_total_absent_pct,
                                     unscheduled_expected:    shiftCounts.night_unscheduled_rd,
                                     unscheduled_present:     shiftCounts.night_unscheduled_rd_present,
                                     unscheduled_present_pct: shiftCounts.night_unscheduled_rd_pct,

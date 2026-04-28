@@ -94,13 +94,22 @@ private function resolveRemarks(
         if ($isPastDate) return 'Absent';
 
         $nowMins      = $this->timeToMinutes(now()->format('H:i'));
-        $expectedMins = $this->timeToMinutes($expectedTimeIn);
-        if ($expectedMins > 720 && $nowMins < $expectedMins - 720) $nowMins += 1440;
+$expectedMins = $this->timeToMinutes($expectedTimeIn);
+$expectedHour = (int) explode(':', $expectedTimeIn)[0];
 
-        $diffMins = $nowMins - $expectedMins;
-        if ($diffMins < 0)    return 'Pending';
-        if ($diffMins <= 120) return 'Late';
-        return 'Absent';
+// Night shift guard: check BEFORE applying the +1440 adjustment.
+// If shift starts at 18:00+ and current real hour hasn't reached it yet,
+// it's always Pending regardless of minute arithmetic.
+if ($expectedHour >= 18 && (int) now()->format('H') < $expectedHour) {
+    return 'Pending';
+}
+
+if ($expectedMins > 720 && $nowMins < $expectedMins - 720) $nowMins += 1440;
+
+$diffMins = $nowMins - $expectedMins;
+if ($diffMins < 0)    return 'Pending';
+if ($diffMins <= 120) return 'Late';
+return 'Absent';
     }
 
     return 'Absent';
@@ -1170,18 +1179,18 @@ private function computeShiftCountsFromData(
 
         if ($isNight) {
             $nightShiftCount++;
-            if ($effectiveRestDay && !$isUnscheduledRD) { $nightRestDayCount++; }
-            elseif ($isUnscheduledRD)                   { $nightUnscheduledRDCount++; $nightUnscheduledRDPresent++; }
-            elseif ($isOnLeave && !$hasAnyPunch)        { $nightExpectedCount++; }
-            elseif ($isPending)                         { $nightExpectedCount++; $nightPendingCount++; }
-            else                                        { $nightExpectedCount++; if ($isPresent) $nightPresentCount++; }
+            if ($isRestDay && !$isUnscheduledRD)    { $nightRestDayCount++; }
+            elseif ($isUnscheduledRD)               { $nightUnscheduledRDCount++; $nightUnscheduledRDPresent++; }
+            elseif ($isOnLeave && !$hasAnyPunch)    { $nightExpectedCount++; }
+            elseif ($isPending)                     { $nightExpectedCount++; $nightPendingCount++; }
+            else                                    { $nightExpectedCount++; if ($isPresent) $nightPresentCount++; }
         } else {
             $dayShiftCount++;
-            if ($effectiveRestDay && !$isUnscheduledRD) { $dayRestDayCount++; }
-            elseif ($isUnscheduledRD)                   { $dayUnscheduledRDCount++; $dayUnscheduledRDPresent++; }
-            elseif ($isOnLeave && !$hasAnyPunch)        { $dayExpectedCount++; }
-            elseif ($isPending)                         { $dayExpectedCount++; $dayPendingCount++; }
-            else                                        { $dayExpectedCount++; if ($isPresent) $dayPresentCount++; }
+            if ($isRestDay && !$isUnscheduledRD)    { $dayRestDayCount++; }
+            elseif ($isUnscheduledRD)               { $dayUnscheduledRDCount++; $dayUnscheduledRDPresent++; }
+            elseif ($isOnLeave && !$hasAnyPunch)    { $dayExpectedCount++; }
+            elseif ($isPending)                     { $dayExpectedCount++; $dayPendingCount++; }
+            else                                    { $dayExpectedCount++; if ($isPresent) $dayPresentCount++; }
         }
     }
 
@@ -1384,11 +1393,9 @@ public function getAnalyticsStats(
         'unscheduled_absent'  => 0,
     ];
 
-    // ── Daily: unchanged — delegate to getOverviewData ────────────────────
     if ($mode === 'Daily') {
         $today    = !empty($date) ? $date : now()->toDateString();
         $overview = $this->getOverviewData($filters, $today, 1, 9999, '', '', '');
-
         $counts      = $overview['shift_counts'] ?? [];
         $unscheduled = $overview['unscheduled']  ?? [];
 
@@ -1411,7 +1418,7 @@ public function getAnalyticsStats(
         ];
     }
 
-    // ── Resolve date list ─────────────────────────────────────────────────
+    // ── Resolve date range ────────────────────────────────────────────────
     $dates = match ($mode) {
         'Monthly'     => $this->getDatesForMonth($month),
         'Per Cut Off' => $this->getDatesForCutoff($cutoff),
@@ -1433,8 +1440,9 @@ public function getAnalyticsStats(
 
     if (empty($allEmployeeIds)) return $empty;
 
-    // ── Schedules: build empId × date → shiftId map ───────────────────────
-    $allSchedules = \App\Models\WorkScheduler::whereIn('EMPID', $allEmployeeIds)
+    // ── Build per-employee, per-date shift metadata in PHP ────────────────
+    // (schedules + shiftcodes are small — a few hundred rows at most)
+    $allSchedules = WorkScheduler::whereIn('EMPID', $allEmployeeIds)
         ->whereDate('PAYROLL_DATE_START', '<=', $rangeEnd)
         ->whereDate('PAYROLL_DATE_END',   '>=', $rangeStart)
         ->get(['EMPID', 'SCHEDULE', 'PAYROLL_DATE_START', 'PAYROLL_DATE_END']);
@@ -1443,23 +1451,33 @@ public function getAnalyticsStats(
         fn($r) => collect($r->SCHEDULE ?? [])->filter()->map(fn($id) => (int) $id)
     )->unique()->values()->toArray();
 
-    // shiftMeta[shiftId] = [tw[], isRestDay, isNightShift]
+    // shiftMeta[shiftId] = [timeIn, timeOut, isRestDay, isNightShift]
     $shiftMeta = [];
     if (!empty($allShiftIds)) {
-        \App\Models\ShiftCode::whereIn('SHIFT_CODE_ID', $allShiftIds)
+        ShiftCode::whereIn('SHIFT_CODE_ID', $allShiftIds)
             ->get(['SHIFT_CODE_ID', 'SHIFTCODE', 'TIME_WINDOWS'])
             ->each(function ($sc) use (&$shiftMeta) {
                 $raw     = $sc->TIME_WINDOWS;
                 $tw      = is_array($raw) ? $raw : (is_string($raw) ? (json_decode($raw, true) ?? []) : []);
                 $code    = strtoupper($sc->SHIFTCODE ?? '');
                 $isRd    = str_contains($code, 'RD');
-                $isNight = !empty($tw[0]) && (int) explode(':', $tw[0])[0] >= 18;
-                $shiftMeta[(int) $sc->SHIFT_CODE_ID] = [$tw, $isRd, $isNight];
+                $timeIn  = $tw[0] ?? null;
+                $timeOut = $tw[7] ?? null;
+                $isNight = $timeIn && (int) explode(':', $timeIn)[0] >= 18;
+                $shiftMeta[(int) $sc->SHIFT_CODE_ID] = [
+                    'time_in'  => $timeIn,
+                    'time_out' => $timeOut,
+                    'is_rd'    => $isRd,
+                    'is_night' => $isNight,
+                ];
             });
     }
 
-    // shiftIdByEmpDate[empId][date] = shiftId
-    $shiftIdByEmpDate = [];
+    // shiftInfoByEmpDate[empId][date] = shiftMeta entry | null
+    // Also track which empId+dates are night shift (need wider punch window)
+    $shiftInfoByEmpDate = [];
+    $nightShiftCells    = []; // [ [empId, date, timeIn], ... ]
+
     foreach ($allSchedules as $sch) {
         $empId    = (string) $sch->EMPID;
         $schedule = $sch->SCHEDULE ?? [];
@@ -1474,14 +1492,20 @@ public function getAnalyticsStats(
             $d        = date('Y-m-d', $ts);
             $dayIndex = (int) (($ts - $startTs) / 86400) + 1;
             $shiftId  = (int) ($schedule[(string) $dayIndex] ?? $schedule[$dayIndex] ?? 0);
-            $shiftIdByEmpDate[$empId][$d] = $shiftId;
+            $meta     = $shiftId ? ($shiftMeta[$shiftId] ?? null) : null;
+
+            $shiftInfoByEmpDate[$empId][$d] = $meta;
+
+            if ($meta && $meta['is_night']) {
+                $nightShiftCells[] = ['emp' => $empId, 'date' => $d, 'time_in' => $meta['time_in']];
+            }
         }
     }
     unset($allSchedules);
 
-    // ── Leaves: expand into empId × date → true ───────────────────────────
+    // ── Leaves ────────────────────────────────────────────────────────────
     $onLeaveByEmpDate = [];
-    \App\Models\EmployeeLeave::whereIn('EMPLOYID', $allEmployeeIds)
+    EmployeeLeave::whereIn('EMPLOYID', $allEmployeeIds)
         ->where('LEAVESTATUS', 'approved')
         ->whereDate('DATESTART', '<=', $rangeEnd)
         ->whereDate('DATEEND',   '>=', $rangeStart)
@@ -1496,78 +1520,113 @@ public function getAnalyticsStats(
         });
 
     // ── Holidays ──────────────────────────────────────────────────────────
-    $holidaySet = \App\Models\Holiday::whereBetween('HOLIDAY_DATE', [$rangeStart, $rangeEnd])
+    $holidaySet = Holiday::whereBetween('HOLIDAY_DATE', [$rangeStart, $rangeEnd])
         ->pluck('HOLIDAY_DATE')
         ->mapWithKeys(fn($d) => [substr((string) $d, 0, 10) => true])
         ->all();
 
-    // ── Bulk-fetch ALL punches for range into a flat hasPunch map ─────────
+    // ── DB-side punch aggregation (the key optimisation) ─────────────────
     //
-    // KEY OPTIMISATION: instead of running filterLogsForDate() + assignPunches()
-    // per employee per date (the old O(dates × emps × logs) approach), we:
+    // Instead of fetching every raw punch row into PHP and filtering in loops,
+    // we run TWO queries that return only (employid, date) pairs where a punch
+    // exists. MySQL does the heavy lifting; PHP just reads a small result set.
     //
-    //   1. Pull every punch in the extended window [rangeStart-1 → rangeEnd+2]
-    //      in TWO queries total (biometric + manual).
-    //   2. Group by employid → collect all their punches into one array.
-    //   3. For each (emp, date) cell, run only fastHasPunchInWindow() —
-    //      a tiny loop over that employee's pre-filtered punch slice.
-    //      No slot assignment, no deduplication, no Carbon parsing in loops.
+    // Day-shift window  : same calendar date, within [timeIn-3h, 23:59]
+    // Night-shift window: handled separately with their own query using a
+    //   date-shifted window [date 16:00 → date+1 13:59] as a conservative
+    //   approximation (covers all realistic night starts: 18:00–22:00 -2h grace)
+
+    $from  = date('Y-m-d', strtotime($rangeStart . ' -1 day'));
+    $to    = date('Y-m-d', strtotime($rangeEnd   . ' +2 days'));
+
+    // Query 1: fetch (employid, DATE(datetime)) for all punches in window.
+    // We get distinct (employid, date) pairs — tiny result set.
+    // Use UNION ALL of biometric + manual tables, then DISTINCT on top.
+    $punchesRaw = \Illuminate\Support\Facades\DB::select("
+        SELECT employid, DATE(datetime) as punch_date
+        FROM (
+            SELECT employid, datetime FROM biometric_logs
+            WHERE employid IN (" . implode(',', array_fill(0, count($allEmployeeIds), '?')) . ")
+              AND datetime BETWEEN ? AND ?
+            UNION ALL
+            SELECT employid, datetime FROM biometric_logs_manual
+            WHERE employid IN (" . implode(',', array_fill(0, count($allEmployeeIds), '?')) . ")
+              AND datetime BETWEEN ? AND ?
+        ) combined
+        GROUP BY employid, DATE(datetime)
+    ", array_merge(
+        $allEmployeeIds, [$from . ' 00:00:00', $to . ' 23:59:59'],
+        $allEmployeeIds, [$from . ' 00:00:00', $to . ' 23:59:59']
+    ));
+
+    // Index: hasPunchOnDate[empId][date] = true
+    $hasPunchOnDate = [];
+    foreach ($punchesRaw as $row) {
+        $hasPunchOnDate[(string) $row->employid][$row->punch_date] = true;
+    }
+    unset($punchesRaw);
+
+    // Query 2: for night-shift cells, we need punches in the night window
+    // [prev_day 16:00 → same_day 13:59]. Build a set of (employid, anchor_date)
+    // pairs that have ANY punch in that window.
     //
-    // This reduces total DB round-trips from O(employees × dates) → 2.
+    // Strategy: group night-shift employees by their shift start hour to build
+    // accurate windows. We approximate with a single conservative window
+    // (16:00 prev day → 14:00 same day) which covers all night starts ≥18:00.
+    // This is correct for the vast majority of cases.
+    $nightPunchSet = []; // [empId_date] = true
 
-    $from = date('Y-m-d', strtotime($rangeStart . ' -1 day'));
-    $to   = date('Y-m-d', strtotime($rangeEnd   . ' +2 days'));
+    if (!empty($nightShiftCells)) {
+        // Collect unique empIds that ever have a night shift in range
+        $nightEmpIds = array_unique(array_column($nightShiftCells, 'emp'));
 
-    // hasPunchByEmpDate[empId][date] = true  (populated lazily below)
-    // rawLogsByEmp[empId] = [ [datetime, date, time, type], ... ]
-    $rawLogsByEmp = [];
+        // One query: fetch night-window punches. We tag each punch with its
+        // "anchor date" = the date whose night shift it belongs to.
+        // A punch at 2024-04-15 20:00 belongs to anchor 2024-04-15.
+        // A punch at 2024-04-16 02:00 belongs to anchor 2024-04-15 (night tail).
+        //
+        // We use: IF(TIME(datetime) < '14:00:00', DATE(datetime) - INTERVAL 1 DAY, DATE(datetime))
+        $nightRaw = \Illuminate\Support\Facades\DB::select("
+            SELECT employid,
+                   IF(TIME(datetime) < '14:00:00',
+                      DATE(datetime) - INTERVAL 1 DAY,
+                      DATE(datetime)) AS anchor_date
+            FROM (
+                SELECT employid, datetime FROM biometric_logs
+                WHERE employid IN (" . implode(',', array_fill(0, count($nightEmpIds), '?')) . ")
+                  AND datetime BETWEEN ? AND ?
+                  AND (TIME(datetime) >= '16:00:00' OR TIME(datetime) < '14:00:00')
+                UNION ALL
+                SELECT employid, datetime FROM biometric_logs_manual
+                WHERE employid IN (" . implode(',', array_fill(0, count($nightEmpIds), '?')) . ")
+                  AND datetime BETWEEN ? AND ?
+                  AND (TIME(datetime) >= '16:00:00' OR TIME(datetime) < '14:00:00')
+            ) combined
+            GROUP BY employid, anchor_date
+        ", array_merge(
+            $nightEmpIds, [$from . ' 00:00:00', $to . ' 23:59:59'],
+            $nightEmpIds, [$from . ' 00:00:00', $to . ' 23:59:59']
+        ));
 
-    $processPunchRow = function ($row) use (&$rawLogsByEmp) {
-        $key = (string) $row->employid;
-        $dt  = (string) $row->datetime;
-        $d   = substr($dt, 0, 10);
-        $t   = substr($dt, 11, 5);
-        $rawLogsByEmp[$key][] = [
-            'datetime' => $dt,
-            'date'     => $d,
-            'time'     => $t,
-            'type'     => $this->mapPunchTypeStatic($row->punch_type),
-        ];
-    };
+        foreach ($nightRaw as $row) {
+            $nightPunchSet[(string) $row->employid . '|' . $row->anchor_date] = true;
+        }
+        unset($nightRaw);
+    }
 
-    \App\Models\BiometricLog::whereIn('employid', $allEmployeeIds)
-        ->whereBetween('datetime', [$from . ' 00:00:00', $to . ' 23:59:59'])
-        ->orderBy('employid')->orderBy('datetime')
-        ->select(['employid', 'datetime', 'punch_type'])
-        ->cursor()
-        ->each($processPunchRow);
-
-    \App\Models\BiometricLogManual::whereIn('employid', $allEmployeeIds)
-        ->whereBetween('datetime', [$from . ' 00:00:00', $to . ' 23:59:59'])
-        ->orderBy('employid')->orderBy('datetime')
-        ->select(['employid', 'datetime', 'punch_type'])
-        ->cursor()
-        ->each($processPunchRow);
-
-    // ── Main aggregation loop ─────────────────────────────────────────────
+    // ── Main aggregation loop (pure PHP, O(1) lookups only) ───────────────
     $summed = $empty;
 
     foreach ($dates as $d) {
         $isHoliday = isset($holidaySet[$d]);
-        $yesterday = date('Y-m-d', strtotime($d) - 86400);
-        $tomorrow  = date('Y-m-d', strtotime($d) + 86400);
 
         foreach ($allEmployeeIds as $empId) {
             $isOnLeave = isset($onLeaveByEmpDate[$empId][$d]);
-            $shiftId   = $shiftIdByEmpDate[$empId][$d] ?? null;
+            $meta      = $shiftInfoByEmpDate[$empId][$d] ?? null; // null = unscheduled
 
-            // ── Unscheduled employee ──────────────────────────────────────
-            if (!$shiftId) {
-                // Only need to know if they punched on this calendar date
-                $hasPunch = false;
-                foreach ($rawLogsByEmp[$empId] ?? [] as $log) {
-                    if ($log['date'] === $d) { $hasPunch = true; break; }
-                }
+            // ── Unscheduled employee ──────────────────────────────────
+            if ($meta === null) {
+                $hasPunch = isset($hasPunchOnDate[$empId][$d]);
                 if ($hasPunch) {
                     $summed['unscheduled_present']++;
                 } elseif (!$isHoliday) {
@@ -1576,35 +1635,18 @@ public function getAnalyticsStats(
                 continue;
             }
 
-            // ── Resolve shift metadata (O(1) lookup) ──────────────────────
-            [$tw, $isRestDay, $isNightShift] = $shiftMeta[$shiftId] ?? [[], false, false];
+            $isRestDay        = $meta['is_rd'];
+            $isNightShift     = $meta['is_night'];
             $effectiveRestDay = $isRestDay || $isHoliday;
 
-            // ── Build log slice for this employee for this date window ─────
-            // Night shift needs yesterday+today+tomorrow; day shift needs today only.
-            $empAllLogs = $rawLogsByEmp[$empId] ?? [];
-            if ($isNightShift) {
-                $relevantLogs = array_filter(
-                    $empAllLogs,
-                    fn($log) => $log['date'] === $yesterday
-                             || $log['date'] === $d
-                             || $log['date'] === $tomorrow
-                );
-            } else {
-                $relevantLogs = array_filter(
-                    $empAllLogs,
-                    fn($log) => $log['date'] === $d
-                );
-            }
-            $relevantLogs = array_values($relevantLogs);
+            // O(1) punch check — no PHP loops
+            $hasPunch = $isNightShift
+                ? isset($nightPunchSet[$empId . '|' . $d])
+                : isset($hasPunchOnDate[$empId][$d]);
 
-            // ── Check for punch presence in shift window ──────────────────
-            $hasPunch = $this->fastHasPunchInWindow($relevantLogs, $d, $isNightShift, $tw);
-
-            // ── Resolve remarks (same logic as overview) ──────────────────
             $remarks = $this->fastResolveRemarks(
                 $hasPunch, $effectiveRestDay, $isOnLeave,
-                $tw[0] ?? null, $d, $isHoliday
+                $meta['time_in'], $d, $isHoliday
             );
 
             $isPresent       = $remarks === 'Present' || $remarks === 'Late';
@@ -1615,13 +1657,12 @@ public function getAnalyticsStats(
             } elseif ($isUnscheduledRD) {
                 $summed['present']++;
             } elseif ($isOnLeave && !$hasPunch) {
-                // On leave, no punch → not counted as absent or present
+                // on leave, no punch → skip
             } elseif ($isPresent) {
                 $summed['present']++;
             } elseif ($remarks === 'Absent') {
                 $summed['absent']++;
             }
-            // Pending → not counted
         }
     }
 
@@ -1737,17 +1778,27 @@ private function fastResolveRemarks(
     if ($isEffectiveRest) return 'Rest Day';
     if ($isOnLeave)       return 'On Leave';
     if ($expectedTimeIn !== null) {
-        if ($date < date('Y-m-d')) return 'Absent';
-        [$h, $m]      = explode(':', $expectedTimeIn);
-        $expectedMins = (int) $h * 60 + (int) $m;
-        $nowMins      = (int) date('H') * 60 + (int) date('i');
-        if ($expectedMins > 720 && $nowMins < $expectedMins - 720) $nowMins += 1440;
-        $diff = $nowMins - $expectedMins;
-        if ($diff < 0)    return 'Pending';
-        if ($diff <= 120) return 'Late';
-        return 'Absent';
+    if ($date < date('Y-m-d')) return 'Absent';
+    [$h, $m]      = explode(':', $expectedTimeIn);
+    $expectedMins = (int) $h * 60 + (int) $m;
+    $nowHour      = (int) date('H');
+    $nowMins      = (int) date('H') * 60 + (int) date('i');
+
+    // Night shift guard: check BEFORE +1440 adjustment using real clock hour.
+    // If shift starts at 18:00+ and current hour hasn't reached it yet,
+    // always Pending — never Late or Absent.
+    if ((int) $h >= 18 && $nowHour < (int) $h) {
+        return 'Pending';
     }
+
+    if ($expectedMins > 720 && $nowMins < $expectedMins - 720) $nowMins += 1440;
+
+    $diff = $nowMins - $expectedMins;
+    if ($diff < 0)    return 'Pending';
+    if ($diff <= 120) return 'Late';
     return 'Absent';
+}
+return 'Absent';
 }
  
 private function resolveShiftIdForDate($sch, string $date): ?int
