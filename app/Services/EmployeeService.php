@@ -2168,5 +2168,4 @@ public function getDtrRowsForEmployee(
         'last_page'    => $lastPage,
     ];
 }
-
 }

@@ -62,7 +62,8 @@ class AuthMiddleware
                 }
             }
 
-            return $next($request)->withCookie($cookie);
+            Cookie::queue($cookie);
+            return $next($request);
         }
 
         // 🔹 Fetch user from authify if session missing or token mismatch
@@ -137,7 +138,8 @@ class AuthMiddleware
             }
         }
 
-        return $next($request)->withCookie($cookie);
+        Cookie::queue($cookie);
+        return $next($request);
     }
 
     /**

@@ -30,6 +30,12 @@ export default function NavLinks({ isSidebarOpen }) {
                 isSidebarOpen={isSidebarOpen}
             />
             <SidebarLink
+                href={route("BioManagement")}
+                icon={<CalendarDays size={20} />}
+                label="Biometric Management"
+                isSidebarOpen={isSidebarOpen}
+            />
+            <SidebarLink
                 href={route("biometric-status.index")}
                 icon={<Users size={20} />}
                 label="Employee Biometric Management"
