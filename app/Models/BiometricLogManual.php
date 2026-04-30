@@ -18,7 +18,7 @@ class BiometricLogManual extends Model
         'device_ip',
         'device_number',
         'punch_type', // <= this can be check_in, check_out, break_in, break_out
-        'employeee_category',  
+        'employee_category',  
         'auth_mode',
         'work_code',
         'state',
