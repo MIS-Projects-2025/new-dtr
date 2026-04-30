@@ -18,4 +18,6 @@ Route::prefix($app_name)->middleware(AuthMiddleware::class)->group(function () {
     Route::get('/biometric-management/ob-employees', [BioManagementController::class, 'getObEmployees'])->name('bio.ob-employees');
     Route::get('/biometric-management/newly-hired-dates',     [BioManagementController::class, 'getNewlyHiredDates'])->name('bio.newly-hired-dates');
     Route::get('/biometric-management/newly-hired-employees', [BioManagementController::class, 'getNewlyHiredEmployees'])->name('bio.newly-hired-employees');
+    Route::get('/biometric-management/ftw-dates',     [BioManagementController::class, 'getFtwDates'])->name('bio.ftw-dates');
+    Route::get('/biometric-management/ftw-employees', [BioManagementController::class, 'getFtwEmployees'])->name('bio.ftw-employees');
 });

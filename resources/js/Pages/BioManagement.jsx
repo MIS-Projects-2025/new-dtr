@@ -70,6 +70,13 @@ const EMPTY_ENTRIES = {
     lunch_in: '', break_out_2: '', break_in_2: '', time_out: ''
 };
 
+const SIMPLE_PUNCH_MAP = [
+    { label: 'Time In',  field: 'time_in',  punch_type: 'check_in'  },
+    { label: 'Time Out', field: 'time_out', punch_type: 'check_out' },
+];
+
+const SIMPLE_EMPTY_ENTRIES = { time_in: '', time_out: '' };
+
 const ObDatePicker = ({ dates = [], value, onChange }) => {
     const [open,       setOpen]       = useState(false);
     const [search,     setSearch]     = useState('');
@@ -168,41 +175,48 @@ const ObDatePicker = ({ dates = [], value, onChange }) => {
 };
 
 const GenericLogForm = ({ category, onClose }) => {
-    const isOB = category === 'official_business';
+    const isOB         = category === 'official_business';
     const isNewlyHired = category === 'newly_hired';
-    const needsDateList = isOB || isNewlyHired;
+    const isFtw        = category === 'fit_to_work';
+    const needsDateList = isOB || isNewlyHired || isFtw;
 
-    const [selectedDate,      setSelectedDate]      = useState('');
-    const [obDates,           setObDates]           = useState(new Set());
-    const [obDatesLoading,    setObDatesLoading]    = useState(false);
-    const [obEmployeeList,    setObEmployeeList]    = useState([]);
-    const [obListLoading,     setObListLoading]     = useState(false);
-    const [selectedEmployees, setSelectedEmployees] = useState([]);
+    const [selectedDate,       setSelectedDate]       = useState('');
+    const [obDates,            setObDates]            = useState(new Set());
+    const [obDatesLoading,     setObDatesLoading]     = useState(false);
+    const [obEmployeeList,     setObEmployeeList]     = useState([]);
+    const [obListLoading,      setObListLoading]      = useState(false);
+    const [selectedEmployees,  setSelectedEmployees]  = useState([]);
     const [employeeSearchTerm, setEmployeeSearchTerm] = useState('');
-    const [searchResults,     setSearchResults]     = useState([]);
-    const [logEntries,        setLogEntries]        = useState(EMPTY_ENTRIES);
-    const [saving,            setSaving]            = useState(false);
+    const [searchResults,      setSearchResults]      = useState([]);
+    const [logEntries,         setLogEntries]         = useState(SIMPLE_EMPTY_ENTRIES);
+    const [saving,             setSaving]             = useState(false);
 
     useEffect(() => {
-            if (!needsDateList) return;
-            setObDatesLoading(true);
-            const routeName = isNewlyHired ? 'bio.newly-hired-dates' : 'bio.ob-dates';
-            axios.get(route(routeName))
-                .then(({ data }) => setObDates(new Set(data)))
-                .catch(err => console.error(err))
-                .finally(() => setObDatesLoading(false));
-        }, []);
+        if (!needsDateList) return;
+        setObDatesLoading(true);
+        const routeName = isNewlyHired
+            ? 'bio.newly-hired-dates'
+            : isFtw
+            ? 'bio.ftw-dates'
+            : 'bio.ob-dates';
+        axios.get(route(routeName))
+            .then(({ data }) => setObDates(new Set(data)))
+            .catch(err => console.error(err))
+            .finally(() => setObDatesLoading(false));
+    }, []);
 
-const handleDateChange = async (date) => {
+    const handleDateChange = async (date) => {
         setSelectedDate(date);
         setSelectedEmployees([]);
         setObEmployeeList([]);
-        setLogEntries(EMPTY_ENTRIES);
+        setLogEntries(SIMPLE_EMPTY_ENTRIES);
         if (!date || !needsDateList) return;
         setObListLoading(true);
         try {
             const routeName = isNewlyHired
                 ? 'bio.newly-hired-employees'
+                : isFtw
+                ? 'bio.ftw-employees'
                 : 'bio.ob-employees';
             const { data } = await axios.get(route(routeName), { params: { date } });
             setObEmployeeList(data);
@@ -221,42 +235,32 @@ const handleDateChange = async (date) => {
     const removeEmployee = (idx) =>
         setSelectedEmployees(prev => prev.filter((_, i) => i !== idx));
 
-    // Compute which slots are enabled based on ALL selected employees' slot analyses.
-    // A slot is enabled (editable) only if it is 'missing' for every selected employee.
-    // A slot is 'has_log' for any selected employee → disabled (already logged).
-    // A slot is 'out_of_range' for any selected employee → disabled.
-    // A slot is 'enabled'  → at least one selected employee is missing it
-    // A slot is 'has_log'  → ALL selected employees already have it logged
-    // A slot is 'disabled' → no selected employee has it in their OB range at all
+    // For FTW: slots are fixed per employee from the FTW record (no manual time input)
+    // For OB/Newly Hired: use the existing slotStatus logic
     const slotStatus = useMemo(() => {
-        if ((!isOB && !isNewlyHired) || selectedEmployees.length === 0) {
-            return PUNCH_MAP.reduce((acc, { field }) => ({ ...acc, [field]: 'enabled' }), {});
+        if (isFtw) {
+            return SIMPLE_PUNCH_MAP.reduce((acc, { field }) => ({ ...acc, [field]: 'disabled' }), {});
         }
-
-        return PUNCH_MAP.reduce((acc, { field }) => {
+        if ((!isOB && !isNewlyHired) || selectedEmployees.length === 0) {
+            return SIMPLE_PUNCH_MAP.reduce((acc, { field }) => ({ ...acc, [field]: 'enabled' }), {});
+        }
+        return SIMPLE_PUNCH_MAP.reduce((acc, { field }) => {
             const statuses = selectedEmployees.map(emp => {
                 const slot = (emp.slots ?? []).find(s => s.key === field);
                 return slot?.status ?? 'out_of_range';
             });
-
             let resolved;
-            if (statuses.some(s => s === 'missing')) {
-                resolved = 'enabled';       // at least one employee needs this slot
-            } else if (statuses.every(s => s === 'has_log')) {
-                resolved = 'has_log';       // everyone already has it
-            } else {
-                resolved = 'disabled';      // out of range for all selected employees
-            }
-
+            if (statuses.some(s => s === 'missing'))       resolved = 'enabled';
+            else if (statuses.every(s => s === 'has_log')) resolved = 'has_log';
+            else                                           resolved = 'disabled';
             return { ...acc, [field]: resolved };
         }, {});
-    }, [selectedEmployees, isOB]);
+    }, [selectedEmployees, isOB, isNewlyHired, isFtw]);
 
-    // Clear log entries for slots that become disabled when selection changes
     useEffect(() => {
         setLogEntries(prev => {
             const next = { ...prev };
-            PUNCH_MAP.forEach(({ field }) => {
+            SIMPLE_PUNCH_MAP.forEach(({ field }) => {
                 if (slotStatus[field] !== 'enabled') next[field] = '';
             });
             return next;
@@ -271,44 +275,75 @@ const handleDateChange = async (date) => {
         } catch (err) { console.error(err); }
     };
 
-const handleSave = async () => {
-    if (!selectedDate)             { alert('Please select a date'); return; }
-    if (!selectedEmployees.length) { alert('Please select at least one employee'); return; }
-    setSaving(true);
-    try {
-        for (const emp of selectedEmployees) {
-            for (const { field, punch_type } of PUNCH_MAP) {
-                if (!logEntries[field]) continue;
-
-                if (isOB) {
-                    // Per-employee check: only write if THIS employee is missing this slot
-                    const slot = (emp.slots ?? []).find(s => s.key === field);
-                    if (!slot || slot.status !== 'missing') continue;
+    // ── FTW Save: time comes from the FTW record (emp.slots[].time_value) ──
+    const handleFtwSave = async () => {
+        if (!selectedDate)             { alert('Please select a date'); return; }
+        if (!selectedEmployees.length) { alert('Please select at least one employee'); return; }
+        setSaving(true);
+        try {
+            for (const emp of selectedEmployees) {
+                for (const slot of (emp.slots ?? [])) {
+                    if (slot.status !== 'missing' || !slot.time_value) continue;
+                    await axios.post(route('bio.add-manual-log'), {
+                        employid:          emp.EMPLOYID,
+                        datetime:          `${selectedDate} ${slot.time_value}:00`,
+                        punch_type:        slot.punch_type,
+                        employee_category: 'fit_to_work',
+                        auth_mode: '', device_number: '', device_ip: '',
+                        work_code: null, state: null,
+                    });
                 }
-
-                await axios.post(route('bio.add-manual-log'), {
-                    employid:          emp.EMPLOYID,
-                    datetime:          `${selectedDate} ${logEntries[field]}:00`,
-                    punch_type,
-                    employee_category: category,
-                    auth_mode: '', device_number: '', device_ip: '',
-                    work_code: null, state: null,
-                });
             }
+            alert('Logs saved successfully!');
+            onClose();
+            setSelectedDate('');
+            setLogEntries(SIMPLE_EMPTY_ENTRIES);
+            setSelectedEmployees([]);
+            setObEmployeeList([]);
+        } catch (err) {
+            console.error(err);
+            alert('Error saving logs. Please try again.');
+        } finally {
+            setSaving(false);
         }
-        alert('Logs saved successfully!');
-        onClose();
-        setSelectedDate('');
-        setLogEntries(EMPTY_ENTRIES);
-        setSelectedEmployees([]);
-        setObEmployeeList([]);
-    } catch (err) {
-        console.error(err);
-        alert('Error saving logs. Please try again.');
-    } finally {
-        setSaving(false);
-    }
-};
+    };
+
+    const handleSave = async () => {
+        if (isFtw) return handleFtwSave();
+        if (!selectedDate)             { alert('Please select a date'); return; }
+        if (!selectedEmployees.length) { alert('Please select at least one employee'); return; }
+        setSaving(true);
+        try {
+            for (const emp of selectedEmployees) {
+                for (const { field, punch_type } of SIMPLE_PUNCH_MAP) {
+                    if (!logEntries[field]) continue;
+                    if (isOB || isNewlyHired) {
+                        const slot = (emp.slots ?? []).find(s => s.key === field);
+                        if (!slot || slot.status !== 'missing') continue;
+                    }
+                    await axios.post(route('bio.add-manual-log'), {
+                        employid:          emp.EMPLOYID,
+                        datetime:          `${selectedDate} ${logEntries[field]}:00`,
+                        punch_type,
+                        employee_category: category,
+                        auth_mode: '', device_number: '', device_ip: '',
+                        work_code: null, state: null,
+                    });
+                }
+            }
+            alert('Logs saved successfully!');
+            onClose();
+            setSelectedDate('');
+            setLogEntries(SIMPLE_EMPTY_ENTRIES);
+            setSelectedEmployees([]);
+            setObEmployeeList([]);
+        } catch (err) {
+            console.error(err);
+            alert('Error saving logs. Please try again.');
+        } finally {
+            setSaving(false);
+        }
+    };
 
     const selectedIds = new Set(selectedEmployees.map(e => e.EMPLOYID));
 
@@ -316,37 +351,41 @@ const handleSave = async () => {
         <div className="space-y-4">
 
             {/* ── Date picker ── */}
-                <div>
-                    <label className="block text-[10px] font-medium text-zinc-600 dark:text-zinc-400 mb-1">
-                        Select Date
-                    </label>
-                    {needsDateList ? (
-                        obDatesLoading ? (
-                            <div className="w-full text-[10px] rounded-md border border-zinc-200 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-800 text-zinc-400 px-3 py-2">
-                                Loading available dates...
-                            </div>
-                        ) : (
-                            <ObDatePicker
-                                dates={[...obDates].sort()}
-                                value={selectedDate}
-                                onChange={handleDateChange}
-                            />
-                        )
+            <div>
+                <label className="block text-[10px] font-medium text-zinc-600 dark:text-zinc-400 mb-1">
+                    Select Date
+                </label>
+                {needsDateList ? (
+                    obDatesLoading ? (
+                        <div className="w-full text-[10px] rounded-md border border-zinc-200 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-800 text-zinc-400 px-3 py-2">
+                            Loading available dates...
+                        </div>
                     ) : (
-                        <input
-                            type="date"
+                        <ObDatePicker
+                            dates={[...obDates].sort().reverse()}
                             value={selectedDate}
-                            onChange={(e) => setSelectedDate(e.target.value)}
-                            className="w-full text-[11px] rounded-md border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 px-3 py-2 focus:outline-none focus:ring-1 focus:ring-zinc-400"
+                            onChange={handleDateChange}
                         />
-                    )}
-                </div>
+                    )
+                ) : (
+                    <input
+                        type="date"
+                        value={selectedDate}
+                        onChange={(e) => setSelectedDate(e.target.value)}
+                        className="w-full text-[11px] rounded-md border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 px-3 py-2 focus:outline-none focus:ring-1 focus:ring-zinc-400"
+                    />
+                )}
+            </div>
 
-            {/* ── OB / Newly Hired employee list ── */}
-            {(isOB || isNewlyHired) && (
+            {/* ── FTW / OB / Newly Hired employee list ── */}
+            {(isOB || isNewlyHired || isFtw) && (
                 <div>
                     <label className="block text-[10px] font-medium text-zinc-600 dark:text-zinc-400 mb-1">
-                        {isNewlyHired ? 'Newly Hired Employees' : 'Employees on OB'}
+                        {isFtw
+                            ? 'Fit to Work Employees'
+                            : isNewlyHired
+                            ? 'Newly Hired Employees'
+                            : 'Employees on OB'}
                         {selectedDate && !obListLoading && (
                             <span className="ml-1 font-normal text-zinc-400">
                                 — {obEmployeeList.length} with missing logs
@@ -356,19 +395,17 @@ const handleSave = async () => {
                     <div className="rounded-md border border-zinc-200 dark:border-zinc-700 overflow-hidden min-h-[80px] max-h-[200px] overflow-y-auto bg-zinc-50 dark:bg-zinc-800/50">
                         {!selectedDate ? (
                             <div className="px-3 py-4 text-[10px] text-zinc-400 text-center">
-                                Select a date to see {isNewlyHired ? 'newly hired employees' : 'employees on OB'}
+                                Select a date to see {isFtw ? 'fit to work employees' : isNewlyHired ? 'newly hired employees' : 'employees on OB'}
                             </div>
                         ) : obListLoading ? (
                             <div className="px-3 py-4 text-[10px] text-zinc-400 text-center">Loading...</div>
                         ) : obEmployeeList.length === 0 ? (
                             <div className="px-3 py-4 text-[10px] text-zinc-400 text-center">
-                                {isNewlyHired
-                                    ? 'No newly hired employees with missing logs on this date'
-                                    : 'No employees with missing OB logs on this date'}
+                                No employees with missing logs on this date
                             </div>
                         ) : (
                             obEmployeeList.map((emp) => {
-                                const isAdded = selectedIds.has(emp.EMPLOYID);
+                                const isAdded      = selectedIds.has(emp.EMPLOYID);
                                 const missingSlots = (emp.slots ?? []).filter(s => s.status === 'missing');
                                 return (
                                     <button
@@ -387,24 +424,19 @@ const handleSave = async () => {
                                             </div>
                                             <div className="text-[9px] text-zinc-500 dark:text-zinc-400 truncate">
                                                 {emp.EMPLOYID} · {emp.DEPARTMENT}
-                                                {isOB && (
+                                                {isFtw && emp.recommendation && (
                                                     <>
                                                         {' · '}
-                                                        <span className="text-amber-600 dark:text-amber-400">
-                                                            OB {emp.ob_from}–{emp.ob_to}
+                                                        <span className="text-teal-600 dark:text-teal-400">
+                                                            Rec: {emp.recommendation === 1 ? 'Return to Work' : emp.recommendation === 2 ? 'Rest' : 'Refer'}
                                                         </span>
                                                     </>
                                                 )}
-                                                {isNewlyHired && (
+                                                {isFtw && emp.diagnose && (
                                                     <>
                                                         {' · '}
                                                         <span className="text-amber-600 dark:text-amber-400">
-                                                            Hired: {(() => {
-                                                                const [y, m, d] = (emp.date_hired ?? '').split('-');
-                                                                return new Date(+y, +m - 1, +d).toLocaleDateString('en-US', {
-                                                                    month: 'short', day: 'numeric', year: 'numeric'
-                                                                });
-                                                            })()}
+                                                            Dx: {emp.diagnose}
                                                         </span>
                                                     </>
                                                 )}
@@ -429,8 +461,8 @@ const handleSave = async () => {
                 </div>
             )}
 
-            {/* ── Non-OB employee search ── */}
-            {!isOB && !isNewlyHired && (
+            {/* ── Non-OB/FTW employee search ── */}
+            {!isOB && !isNewlyHired && !isFtw && (
                 <div className="relative">
                     <label className="block text-[10px] font-medium text-zinc-600 dark:text-zinc-400 mb-1">
                         Search Employee
@@ -476,7 +508,7 @@ const handleSave = async () => {
                 <div className="w-full rounded-md border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 p-3 min-h-[80px]">
                     {selectedEmployees.length === 0 ? (
                         <p className="text-[10px] text-zinc-400 dark:text-zinc-500">
-                            {(isOB || isNewlyHired) ? 'Click an employee from the list above to add' : 'No employees selected — search above to add'}
+                            {(isOB || isNewlyHired || isFtw) ? 'Click an employee from the list above to add' : 'No employees selected — search above to add'}
                         </p>
                     ) : (
                         <div className="flex flex-wrap gap-2">
@@ -495,76 +527,92 @@ const handleSave = async () => {
                 </div>
             </div>
 
-            {/* ── Log entries ── */}
-            <div>
-                <label className="block text-[10px] font-medium text-zinc-600 dark:text-zinc-400 mb-2">
-                    Log Entries
-                </label>
-                <div className="grid grid-cols-4 gap-3">
-                    {PUNCH_MAP.map(({ label, field }) => {
-                        const status   = slotStatus[field] ?? 'enabled';
-                        const disabled = status !== 'enabled';
-                        return (
-                            <div key={field}>
-                                <label className={`block text-[9px] mb-1 ${
-                                    status === 'has_log'    ? 'text-green-600 dark:text-green-400' :
-                                    status === 'disabled'   ? 'text-zinc-300 dark:text-zinc-600'   :
-                                    'text-zinc-500 dark:text-zinc-400'
-                                }`}>
-                                    {label}
-                                    {status === 'has_log'  && <span className="ml-1">✓</span>}
-                                    {status === 'disabled' && <span className="ml-1 text-[8px]">N/A</span>}
-                                </label>
-                                <input
-                                    type="time"
-                                    value={logEntries[field]}
-                                    disabled={disabled}
-                                    onChange={(e) => setLogEntries(prev => ({ ...prev, [field]: e.target.value }))}
-                                    className={`w-full text-[10px] rounded-md border px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-zinc-400 transition-colors
-                                        ${disabled
-                                            ? 'border-zinc-100 dark:border-zinc-800 bg-zinc-100 dark:bg-zinc-800/30 text-zinc-300 dark:text-zinc-600 cursor-not-allowed'
-                                            : 'border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300'
-                                        }`}
-                                />
-                            </div>
-                        );
-                    })}
-                </div>
-                {(isOB || isNewlyHired) && selectedEmployees.length > 0 && (
-                    <div className="mt-2 flex items-center gap-3 text-[9px] text-zinc-400">
-                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 inline-block" /> Editable</span>
-                        <span className="flex items-center gap-1"><span className="text-green-600 dark:text-green-400">✓</span> Already logged</span>
-                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-zinc-100 dark:bg-zinc-800/30 border border-zinc-100 dark:border-zinc-800 inline-block" /> Out of OB range</span>
-                    </div>
-                )}
-                {(isOB || isNewlyHired) && selectedEmployees.length > 1 && (
-                    <div className="mt-2 p-2 rounded-md bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-100 dark:border-zinc-800">
-                        <p className="text-[9px] text-zinc-500 dark:text-zinc-400 mb-1.5 font-medium">
-                            Per-employee breakdown
-                        </p>
-                        <div className="space-y-1">
-                            {selectedEmployees.map((emp) => {
-                                const missing = (emp.slots ?? [])
-                                    .filter(s => s.status === 'missing')
-                                    .map(s => s.label);
-                                return (
-                                    <div key={emp.EMPLOYID} className="flex items-start gap-2 text-[9px]">
-                                        <span className="text-zinc-600 dark:text-zinc-300 font-medium flex-shrink-0">
-                                            {emp.EMPNAME}:
-                                        </span>
-                                        <span className="text-red-500 dark:text-red-400">
-                                            {missing.length > 0 ? missing.join(', ') : '—'}
-                                        </span>
+            {/* ── FTW: show fixed log preview instead of time inputs ── */}
+            {isFtw ? (
+                selectedEmployees.length > 0 && (
+                    <div>
+                        <label className="block text-[10px] font-medium text-zinc-600 dark:text-zinc-400 mb-2">
+                            Logs to be Saved
+                        </label>
+                        <div className="rounded-md border border-zinc-200 dark:border-zinc-700 overflow-hidden">
+                            {selectedEmployees.map((emp) => (
+                                <div key={emp.EMPLOYID} className="px-3 py-2 border-b border-zinc-100 dark:border-zinc-800 last:border-0">
+                                    <div className="text-[10px] font-medium text-zinc-700 dark:text-zinc-300">
+                                        {emp.EMPNAME}
                                     </div>
-                                );
-                            })}
+                                    {emp.diagnose && (
+                                        <div className="text-[9px] text-amber-600 dark:text-amber-400 mb-1">
+                                            Dx: {emp.diagnose}
+                                        </div>
+                                    )}
+                                    <div className="flex flex-wrap gap-2">
+                                        {(emp.slots ?? []).map((slot) => (
+                                            <div
+                                                key={slot.key}
+                                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-medium
+                                                    ${slot.status === 'missing'
+                                                        ? 'bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800'
+                                                        : 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400 border border-green-200 dark:border-green-800'
+                                                    }`}
+                                            >
+                                                <span>{slot.label}:</span>
+                                                <span className="font-mono">{slot.time_value ?? '—'}</span>
+                                                {slot.status === 'has_log' && <span>✓</span>}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            ))}
                         </div>
-                        <p className="text-[8px] text-zinc-400 dark:text-zinc-500 mt-1.5">
-                            Each employee only receives the log entries they are missing.
+                        <p className="mt-1.5 text-[9px] text-zinc-400 dark:text-zinc-500">
+                            Times are pulled directly from the FTW record. Only missing logs will be saved.
                         </p>
                     </div>
-                )}
-            </div>
+                )
+            ) : (
+                /* ── Non-FTW: time input grid ── */
+                <div>
+                    <label className="block text-[10px] font-medium text-zinc-600 dark:text-zinc-400 mb-2">
+                        Log Entries
+                    </label>
+                    <div className="grid grid-cols-2 gap-3">
+                        {SIMPLE_PUNCH_MAP.map(({ label, field }) => {
+                            const status   = slotStatus[field] ?? 'enabled';
+                            const disabled = status !== 'enabled';
+                            return (
+                                <div key={field}>
+                                    <label className={`block text-[9px] mb-1 ${
+                                        status === 'has_log'  ? 'text-green-600 dark:text-green-400' :
+                                        status === 'disabled' ? 'text-zinc-300 dark:text-zinc-600'   :
+                                        'text-zinc-500 dark:text-zinc-400'
+                                    }`}>
+                                        {label}
+                                        {status === 'has_log'  && <span className="ml-1">✓</span>}
+                                        {status === 'disabled' && <span className="ml-1 text-[8px]">N/A</span>}
+                                    </label>
+                                    <input
+                                        type="time"
+                                        value={logEntries[field]}
+                                        disabled={disabled}
+                                        onChange={(e) => setLogEntries(prev => ({ ...prev, [field]: e.target.value }))}
+                                        className={`w-full text-[10px] rounded-md border px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-zinc-400 transition-colors
+                                            ${disabled
+                                                ? 'border-zinc-100 dark:border-zinc-800 bg-zinc-100 dark:bg-zinc-800/30 text-zinc-300 dark:text-zinc-600 cursor-not-allowed'
+                                                : 'border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300'
+                                            }`}
+                                    />
+                                </div>
+                            );
+                        })}
+                    </div>
+                    {(isOB || isNewlyHired) && selectedEmployees.length > 0 && (
+                        <div className="mt-2 flex items-center gap-3 text-[9px] text-zinc-400">
+                            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 inline-block" /> Editable</span>
+                            <span className="flex items-center gap-1"><span className="text-green-600 dark:text-green-400">✓</span> Already logged</span>
+                        </div>
+                    )}
+                </div>
+            )}
 
             {/* ── Actions ── */}
             <div className="flex items-center justify-end gap-2 pt-4 border-t border-zinc-200 dark:border-zinc-700">

@@ -259,4 +259,9 @@ class EmployeeMasterlist extends Model
     {
         return $this->hasMany(VPLog::class, 'employee_id', 'EMPLOYID');
     }
+
+    public function ftwRecords()
+    {
+        return $this->hasMany(FtwTbl::class, 'emp_no', 'EMPLOYID');
+    }
 }

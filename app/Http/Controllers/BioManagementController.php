@@ -12,6 +12,7 @@ class BioManagementController extends Controller
 {
     public function __construct(
         private EmployeeService $employeeService,
+        private \App\Services\DtrLogService $dtrLogService,
     ) {}
 
     public function index(Request $request)
@@ -254,15 +255,16 @@ public function addManualLog(Request $request)
 public function getObEmployees(Request $request)
 {
     $date = $request->get('date', '');
-    if (!$date) return response()->json([]);
+    \Log::info('OB date requested: ' . $date);
 
-    // Get all OB records covering this date
     $obs = \App\Models\ObRecord::whereIn('STATUS', [1, 2])
         ->where('FORM_TYPE', 'ob')
         ->whereDate('DATE_OB_FROM', '<=', $date)
         ->whereDate('DATE_OB_TO',   '>=', $date)
         ->get(['EMPID', 'TIME_FROM', 'TIME_TO']);
 
+    \Log::info('OB records found: ' . $obs->count());
+    \Log::info($obs->toArray());
     if ($obs->isEmpty()) return response()->json([]);
 
     $empIds = $obs->pluck('EMPID')->unique()->values()->toArray();
@@ -287,10 +289,18 @@ public function getObEmployees(Request $request)
         $tw = $this->resolveTimeWindowsForDate($employId, $date);
 
         // ── Get actual logs for this date ─────────────────────────────────
-        $actualLogs = $this->resolveActualLogs($employId, $date, $tw);
+        $actualLogs = $this->dtrLogService->resolveLogsForEmployees(
+            [$employId],
+            [$employId => $tw],
+            [$employId => 'Normal'],
+            $date
+        )[$employId] ?? [];
 
         // ── Build slot analysis ───────────────────────────────────────────
         $slots = $this->analyzeSlots($tw, $actualLogs, $obFrom, $obTo);
+        \Log::info('Slots for ' . $employId . ':', $slots);
+        \Log::info('TW: ', $tw);
+        \Log::info('Actual logs: ', $actualLogs);
 
         // Only include this employee if at least one slot is missing within OB range
         $hasMissingInObRange = collect($slots)->contains(
@@ -323,8 +333,8 @@ private function resolveTimeWindowsForDate(string $employId, string $date): arra
 
     if (!$schedule) return [];
 
-    $payrollStart = \Carbon\Carbon::parse($schedule->PAYROLL_DATE_START)->startOfDay();
-    $target       = \Carbon\Carbon::parse($date)->startOfDay();
+    $payrollStart = Carbon::parse($schedule->PAYROLL_DATE_START)->startOfDay();
+    $target       = Carbon::parse($date)->startOfDay();
     $dayIndex     = (int) $payrollStart->diffInDays($target) + 1;
 
     $scheduleArray = is_string($schedule->SCHEDULE)
@@ -344,8 +354,8 @@ private function resolveTimeWindowsForDate(string $employId, string $date): arra
 // ── Resolve actual logs using biometric + manual tables ───────────────────────
 private function resolveActualLogs(string $employId, string $date, array $tw): array
 {
-    $from = \Carbon\Carbon::parse($date)->subDay()->toDateString();
-    $to   = \Carbon\Carbon::parse($date)->addDays(2)->toDateString();
+    $from = Carbon::parse($date)->subDay()->toDateString();
+    $to   = Carbon::parse($date)->addDays(2)->toDateString();
 
     $isNight = !empty($tw[0]) && (int) explode(':', $tw[0])[0] >= 18;
 
@@ -385,14 +395,14 @@ private function resolveActualLogs(string $employId, string $date, array $tw): a
     };
 
     foreach (['biometric_logs' => 'auto', 'biometric_logs_manual' => 'manual'] as $table => $source) {
-        $logs = \Illuminate\Support\Facades\DB::table($table)
+        $logs = DB::table($table)
             ->where('employid', $employId)
             ->whereBetween('datetime', [$from . ' 00:00:00', $to . ' 23:59:59'])
             ->orderBy('datetime')
             ->get(['datetime', 'punch_type']);
 
         foreach ($logs as $log) {
-            $time      = \Carbon\Carbon::parse($log->datetime)->format('H:i');
+            $time      = Carbon::parse($log->datetime)->format('H:i');
             $punchType = $log->punch_type;
 
             match ($punchType) {
@@ -417,48 +427,43 @@ private function analyzeSlots(array $tw, array $actualLogs, string $obFrom, stri
     $obToMins   = $toMins($obTo);
 
     $slotDefs = [
-        ['key' => 'time_in',     'twIdx' => 0, 'label' => 'Time In'],
-        ['key' => 'break_out_1', 'twIdx' => 1, 'label' => 'Break Out 1'],
-        ['key' => 'break_in_1',  'twIdx' => 2, 'label' => 'Break In 1'],
-        ['key' => 'lunch_out',   'twIdx' => 3, 'label' => 'Lunch Out'],
-        ['key' => 'lunch_in',    'twIdx' => 4, 'label' => 'Lunch In'],
-        ['key' => 'break_out_2', 'twIdx' => 5, 'label' => 'Break Out 2'],
-        ['key' => 'break_in_2',  'twIdx' => 6, 'label' => 'Break In 2'],
-        ['key' => 'time_out',    'twIdx' => 7, 'label' => 'Time Out'],
+        ['key' => 'time_in',  'twIdx' => 0, 'label' => 'Time In',  'fallback' => $obFrom],
+        ['key' => 'time_out', 'twIdx' => 7, 'label' => 'Time Out', 'fallback' => $obTo],
     ];
 
     $result = [];
 
     foreach ($slotDefs as $slot) {
-        $expectedTime = $tw[$slot['twIdx']] ?? null;
+        $expectedTime = $tw[$slot['twIdx']] ?? $slot['fallback'];
         $actualTime   = $actualLogs[$slot['key']] ?? null;
         $expectedMins = $toMins($expectedTime);
 
-        // Is this slot's expected time within the OB range?
+        // A slot is "in OB range" if:
+        // 1. The expected time falls directly within the OB window, OR
+        // 2. The OB overlaps with the shift (employee was supposed to be present
+        //    during OB hours, so missing time_in/out is still attributable to OB)
         $inObRange = $expectedMins !== null
             && $expectedMins >= $obFromMins
             && $expectedMins <= $obToMins;
-
         $status = match(true) {
-            $actualTime !== null                    => 'has_log',   // already logged
-            !$inObRange                             => 'out_of_range', // not covered by OB
-            $expectedTime === null                  => 'out_of_range', // no schedule slot
-            default                                 => 'missing',   // in OB range, no log
+            $actualTime !== null   => 'has_log',
+            !$inObRange            => 'out_of_range',
+            $expectedTime === null => 'out_of_range',
+            default                => 'missing',
         };
 
         $result[] = [
-            'key'          => $slot['key'],
-            'label'        => $slot['label'],
-            'expected'     => $expectedTime,
-            'actual'       => $actualTime,
-            'in_ob_range'  => $inObRange,
-            'status'       => $status,  // 'missing' | 'has_log' | 'out_of_range'
+            'key'         => $slot['key'],
+            'label'       => $slot['label'],
+            'expected'    => $expectedTime,
+            'actual'      => $actualTime,
+            'in_ob_range' => $inObRange,
+            'status'      => $status,
         ];
     }
 
     return $result;
 }
-
 // Separate endpoint — just returns the distinct dates that have any OB record
 public function getObDates(Request $request)
 {
@@ -477,8 +482,8 @@ public function getObDates(Request $request)
     // Expand all OB records into individual dates
     $datesToCheck = collect();
     foreach ($obs as $ob) {
-        $start = \Carbon\Carbon::parse(max($ob->DATE_OB_FROM, $minDate));
-        $end   = \Carbon\Carbon::parse(min($ob->DATE_OB_TO, $today));
+        $start = Carbon::parse(max($ob->DATE_OB_FROM, $minDate));
+        $end   = Carbon::parse(min($ob->DATE_OB_TO, $today));
         while ($start->lte($end)) {
             $datesToCheck->push($start->toDateString());
             $start->addDay();
@@ -519,7 +524,12 @@ public function getObDates(Request $request)
             $obFrom     = substr($ob->TIME_FROM, 0, 5);
             $obTo       = substr($ob->TIME_TO,   0, 5);
             $tw         = $this->resolveTimeWindowsForDate($emp->EMPLOYID, $date);
-            $actualLogs = $this->resolveActualLogs($emp->EMPLOYID, $date, $tw);
+            $actualLogs = $this->dtrLogService->resolveLogsForEmployees(
+                [$emp->EMPLOYID],
+                [$emp->EMPLOYID => $tw],
+                [$emp->EMPLOYID => 'Normal'],
+                $date
+            )[$emp->EMPLOYID] ?? [];
             $slots      = $this->analyzeSlots($tw, $actualLogs, $obFrom, $obTo);
 
             $hasMissing = collect($slots)->contains(
@@ -545,110 +555,53 @@ public function getNewlyHiredEmployees(Request $request)
     $date = $request->get('date', '');
     if (!$date) return response()->json([]);
 
-    // Find employees whose DATEHIRED matches the selected date
     $employees = \App\Models\EmployeeMasterlist::whereDate('DATEHIRED', $date)
         ->where('ACCSTATUS', 1)
         ->get(['EMPLOYID', 'EMPNAME', 'DEPARTMENT', 'JOB_TITLE', 'DATEHIRED']);
 
     if ($employees->isEmpty()) return response()->json([]);
 
+    $employIds = $employees->pluck('EMPLOYID')->toArray();
+
+    // Use DtrLogService — same logic as admin dashboard and DTR page
+    // This correctly handles night shifts, date windowing, deduplication, etc.
+    $timeWindowsMap  = array_fill_keys($employIds, []);
+    $scheduleTypeMap = array_fill_keys($employIds, 'Normal');
+
+    $resolvedLogs = $this->dtrLogService->resolveLogsForEmployees(
+        $employIds, $timeWindowsMap, $scheduleTypeMap, $date
+    );
+
     $result = [];
 
     foreach ($employees as $emp) {
-        $employId = $emp->EMPLOYID;
+        $employId   = $emp->EMPLOYID;
+        $actualLogs = $resolvedLogs[$employId] ?? [];
 
-        // Fetch actual logs for this date (biometric + manual)
-        $from = \Carbon\Carbon::parse($date)->subDay()->toDateString();
-        $to   = \Carbon\Carbon::parse($date)->addDay()->toDateString();
+        $timeIn  = !empty($actualLogs['time_in'])  && $actualLogs['time_in']  !== '--:--'
+            ? $actualLogs['time_in']  : null;
+        $timeOut = !empty($actualLogs['time_out']) && $actualLogs['time_out'] !== '--:--'
+            ? $actualLogs['time_out'] : null;
 
-        $actualTimes = collect();
-
-        $bioLogs = \Illuminate\Support\Facades\DB::table('biometric_logs')
-            ->where('employid', $employId)
-            ->whereBetween('datetime', [$from . ' 00:00:00', $to . ' 23:59:59'])
-            ->orderBy('datetime')
-            ->get(['datetime', 'punch_type']);
-
-        $manualLogs = \Illuminate\Support\Facades\DB::table('biometric_logs_manual')
-            ->where('employid', $employId)
-            ->whereBetween('datetime', [$from . ' 00:00:00', $to . ' 23:59:59'])
-            ->orderBy('datetime')
-            ->get(['datetime', 'punch_type']);
-
-        $allLogs = $bioLogs->merge($manualLogs)->sortBy('datetime');
-
-        // Build slot map
-        $slots = [
-            'time_in'     => null,
-            'break_out_1' => null,
-            'break_in_1'  => null,
-            'lunch_out'   => null,
-            'lunch_in'    => null,
-            'break_out_2' => null,
-            'break_in_2'  => null,
-            'time_out'    => null,
+        $slotAnalysis = [
+            [
+                'key'         => 'time_in',
+                'label'       => 'Time In',
+                'actual'      => $timeIn,
+                'status'      => $timeIn !== null ? 'has_log' : 'missing',
+                'in_ob_range' => true,
+            ],
+            [
+                'key'         => 'time_out',
+                'label'       => 'Time Out',
+                'actual'      => $timeOut,
+                'status'      => $timeOut !== null ? 'has_log' : 'missing',
+                'in_ob_range' => true,
+            ],
         ];
 
-        $punchTypeMap = [
-            '0' => 'check_in',  'check_in'  => 'check_in',
-            '1' => 'check_out', 'check_out' => 'check_out',
-            '2' => 'break_out', 'break_out' => 'break_out',
-            '3' => 'break_in',  'break_in'  => 'break_in',
-        ];
-
-        $breakOutOrder = ['break_out_1', 'lunch_out', 'break_out_2'];
-        $breakInOrder  = ['break_in_1',  'lunch_in',  'break_in_2'];
-        $boIdx = $biIdx = 0;
-
-        foreach ($allLogs as $log) {
-            $time = \Carbon\Carbon::parse($log->datetime)->format('H:i');
-            $type = $punchTypeMap[$log->punch_type] ?? null;
-
-            match ($type) {
-                'check_in'  => ($slots['time_in']  ??= $time),
-                'check_out' => ($slots['time_out']   = $time),
-                'break_out' => (function () use (&$slots, &$boIdx, $breakOutOrder, $time) {
-                    while ($boIdx < count($breakOutOrder) && $slots[$breakOutOrder[$boIdx]] !== null) $boIdx++;
-                    if ($boIdx < count($breakOutOrder)) $slots[$breakOutOrder[$boIdx++]] = $time;
-                })(),
-                'break_in'  => (function () use (&$slots, &$biIdx, $breakInOrder, $time) {
-                    while ($biIdx < count($breakInOrder) && $slots[$breakInOrder[$biIdx]] !== null) $biIdx++;
-                    if ($biIdx < count($breakInOrder)) $slots[$breakInOrder[$biIdx++]] = $time;
-                })(),
-                default => null,
-            };
-        }
-
-        // Build slot analysis — all slots are "in range" since there's no schedule
-        $slotDefs = [
-            ['key' => 'time_in',     'label' => 'Time In'],
-            ['key' => 'break_out_1', 'label' => 'Break Out 1'],
-            ['key' => 'break_in_1',  'label' => 'Break In 1'],
-            ['key' => 'lunch_out',   'label' => 'Lunch Out'],
-            ['key' => 'lunch_in',    'label' => 'Lunch In'],
-            ['key' => 'break_out_2', 'label' => 'Break Out 2'],
-            ['key' => 'break_in_2',  'label' => 'Break In 2'],
-            ['key' => 'time_out',    'label' => 'Time Out'],
-        ];
-
-        $slotAnalysis = [];
-        $hasMissing   = false;
-
-        foreach ($slotDefs as $def) {
-            $actual  = $slots[$def['key']];
-            $status  = $actual !== null ? 'has_log' : 'missing';
-            if ($status === 'missing') $hasMissing = true;
-
-            $slotAnalysis[] = [
-                'key'         => $def['key'],
-                'label'       => $def['label'],
-                'actual'      => $actual,
-                'status'      => $status,
-                'in_ob_range' => true, // all slots are eligible for newly hired
-            ];
-        }
-
-        if (!$hasMissing) continue; // skip if all slots already filled
+        $hasMissing = collect($slotAnalysis)->contains(fn($s) => $s['status'] === 'missing');
+        if (!$hasMissing) continue;
 
         $result[] = [
             'EMPLOYID'   => $employId,
@@ -684,5 +637,158 @@ public function getNewlyHiredDates(Request $request)
     return response()->json($dates);
 }
 
+public function getFtwDates(Request $request)
+{
+    $minDate = '2026-01-01';
+    $today   = now()->toDateString();
 
+    // Get distinct dates where there are FTW records with recommendation 1, 2, or 3
+    $dates = \App\Models\FtwTbl::whereIn('recommendation', [1, 2, 3])
+        ->whereNotNull('date_created')
+        ->whereDate('date_created', '>=', $minDate)
+        ->whereDate('date_created', '<=', $today)
+        ->get(['emp_no', 'recommendation', 'emp_time_in', 'emp_time_out', 'date_created']);
+
+    if ($dates->isEmpty()) return response()->json([]);
+
+    // Filter to only dates where at least one employee is still missing their log
+    $validDates = [];
+    $allDates   = $dates
+        ->map(fn($r) => Carbon::parse($r->date_created)->toDateString())
+        ->unique()->sort()->values();
+
+    foreach ($allDates as $date) {
+        // Change this line in getFtwDates:
+    $records = \App\Models\FtwTbl::whereIn('recommendation', [1, 2, 3])
+        ->whereDate('date_created', $date)
+        ->get(['emp_no', 'recommendation', 'emp_time_in', 'emp_time_out']);
+
+    // And when calling ftwEmployeeHasMissingLog, use getRawOriginal:
+    foreach ($records as $rec) {
+        $empId      = $rec->emp_no;
+        // In getFtwDates, update the call — drop $timeOut entirely:
+        $hasMissing = $this->ftwEmployeeHasMissingLog(
+            $empId,
+            $date,
+            (int) $rec->recommendation,
+            $rec->emp_time_in?->format('H:i')  // ✅ only this
+        );
+        if ($hasMissing) {
+            $validDates[] = $date;
+            break;
+        }
+    }
+    }
+
+    return response()->json(array_values(array_unique($validDates)));
+}
+
+public function getFtwEmployees(Request $request)
+{
+    $date = $request->get('date', '');
+    if (!$date) return response()->json([]);
+
+    $records = \App\Models\FtwTbl::whereIn('recommendation', [1, 2, 3])
+        ->whereDate('date_created', $date)
+        ->get(['emp_no', 'recommendation', 'emp_time_in', 'emp_diagnose']);
+
+    if ($records->isEmpty()) return response()->json([]);
+
+    $empIds    = $records->pluck('emp_no')->unique()->values()->toArray();
+    $employees = \App\Models\EmployeeMasterlist::whereIn('EMPLOYID', $empIds)
+        ->get(['EMPLOYID', 'EMPNAME', 'DEPARTMENT', 'JOB_TITLE'])
+        ->keyBy('EMPLOYID');
+
+    $byEmp  = $records->groupBy('emp_no');
+    $result = [];
+
+    foreach ($byEmp as $empId => $empRecords) {
+        $emp = $employees[$empId] ?? null;
+        if (!$emp) continue;
+
+        $slots = [];
+
+        foreach ($empRecords as $rec) {
+            $recommendation = (int) $rec->recommendation;
+            $time = $rec->emp_time_in?->format('H:i'); // ✅ always use emp_time_in
+
+            if ($recommendation === 1) {
+                // Fit to Work → check_in
+                $hasLog = $time && $this->hasExistingLog($empId, $date, 'check_in');
+
+                $slots[] = [
+                    'key'         => 'time_in',
+                    'label'       => 'Time In',
+                    'expected'    => $time,
+                    'actual'      => $hasLog ? $time : null,
+                    'status'      => $hasLog ? 'has_log' : ($time ? 'missing' : 'out_of_range'),
+                    'in_ob_range' => true,
+                    'punch_type'  => 'check_in',
+                    'time_value'  => $time,
+                ];
+
+            } elseif (in_array($recommendation, [2, 3])) {
+                // Sent Home / Sent to Hospital → check_out, time still from emp_time_in
+                $hasLog = $time && $this->hasExistingLog($empId, $date, 'check_out');
+
+                $slots[] = [
+                    'key'         => 'time_out',
+                    'label'       => 'Time Out',
+                    'expected'    => $time,
+                    'actual'      => $hasLog ? $time : null,
+                    'status'      => $hasLog ? 'has_log' : ($time ? 'missing' : 'out_of_range'),
+                    'in_ob_range' => true,
+                    'punch_type'  => 'check_out',
+                    'time_value'  => $time,
+                ];
+            }
+        }
+
+        $hasMissing = collect($slots)->contains(fn($s) => $s['status'] === 'missing');
+        if (!$hasMissing) continue;
+
+        $result[] = [
+            'EMPLOYID'       => $empId,
+            'EMPNAME'        => $emp->EMPNAME,
+            'DEPARTMENT'     => $emp->DEPARTMENT,
+            'JOB_TITLE'      => $emp->JOB_TITLE,
+            'slots'          => $slots,
+            'recommendation' => $empRecords->first()->recommendation,
+            'diagnose'       => $empRecords->first()->emp_diagnose ?? null,
+        ];
+    }
+
+    return response()->json($result);
+}
+
+// ── Check if a specific punch_type log already exists for an employee on a date ──
+private function hasExistingLog(string $empId, string $date, string $punchType): bool
+{
+    $from = Carbon::parse($date)->startOfDay()->toDateTimeString();
+    $to   = Carbon::parse($date)->endOfDay()->toDateTimeString();
+
+    $inBio = DB::table('biometric_logs')
+        ->where('employid', $empId)
+        ->where('punch_type', $punchType)
+        ->whereBetween('datetime', [$from, $to])
+        ->exists();
+
+    if ($inBio) return true;
+
+    return DB::table('biometric_logs_manual')
+        ->where('employid', $empId)
+        ->where('punch_type', $punchType)
+        ->whereBetween('datetime', [$from, $to])
+        ->exists();
+}
+
+// ── Helper: check if a single FTW employee+date combo has a missing log ──
+private function ftwEmployeeHasMissingLog(string $empId, string $date, int $recommendation, $timeIn): bool
+{
+    if (!$timeIn) return false;
+
+    $punchType = $recommendation === 1 ? 'check_in' : 'check_out'; // 2 & 3 → check_out
+
+    return !$this->hasExistingLog($empId, $date, $punchType);
+}
 }
