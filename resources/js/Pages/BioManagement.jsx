@@ -1485,7 +1485,13 @@ const [showAddModal, setShowAddModal] = useState(false);
                 <li>Every employee is listed for <span className="font-medium">every date</span> in the range</li>
                 <li>Includes Rest Day, Holiday, On Leave, OB/PB, Absent, Present, Pending</li>
                 <li><span className="font-medium">With Breaks</span> — all break/lunch slots; unscheduled employees show Time In &amp; Time Out only</li>
+                <li className="font-mono bg-zinc-200 dark:bg-zinc-700 px-1.5 py-0.5 rounded list-none">
+                    <span className="font-medium">Format: </span>EmployeeID | Employee Name | Department | Station | Prodline | Date | Day | Shift | Time in | Break out 1 | Break in 1 | Lunch out | Lunch in | Break out 2 | Break in 2 | Time out | Remarks
+                </li>
                 <li><span className="font-medium">Without Breaks</span> — Time In and Time Out columns only</li>
+                <li className="font-mono bg-zinc-200 dark:bg-zinc-700 px-1.5 py-0.5 rounded list-none">
+                    <span className="font-medium">Format: </span>EmployeeID | Employee Name | Date DTR | Time DTR | Flag
+                </li>
                 <li>Colour-coded rows: green = present, red = absent, yellow = holiday, blue = leave, gray = rest day</li>
             </ul>
         </div>
