@@ -9,15 +9,13 @@ Route::redirect('/', "/$app_name");
 Route::prefix($app_name)->middleware(AuthMiddleware::class)->group(function () {
     Route::get("biomanagement", [BioManagementController::class, 'index'])->name('BioManagement');
     Route::post("/biometric-management/import", [BioManagementController::class, 'importLogs'])->name('bio.import');
-    
-    // Add this line for fetching manual logs
     Route::get("/biometric-management/manual-logs", [BioManagementController::class, 'getManualLogs'])->name('bio.manual-logs');
     Route::post("/biometric-management/add-manual-log", [BioManagementController::class, 'addManualLog'])->name('bio.add-manual-log');
     Route::get("/biometric-management/search-employees", [BioManagementController::class, 'searchEmployees'])->name('bio.search-employees');
-    Route::get('/biometric-management/ob-dates',     [BioManagementController::class, 'getObDates'])->name('bio.ob-dates');
-    Route::get('/biometric-management/ob-employees', [BioManagementController::class, 'getObEmployees'])->name('bio.ob-employees');
+    Route::get('/biometric-management/ob-dates',              [BioManagementController::class, 'getObDates'])->name('bio.ob-dates');
+    Route::get('/biometric-management/ob-employees',          [BioManagementController::class, 'getObEmployees'])->name('bio.ob-employees');
     Route::get('/biometric-management/newly-hired-dates',     [BioManagementController::class, 'getNewlyHiredDates'])->name('bio.newly-hired-dates');
     Route::get('/biometric-management/newly-hired-employees', [BioManagementController::class, 'getNewlyHiredEmployees'])->name('bio.newly-hired-employees');
-    Route::get('/biometric-management/ftw-dates',     [BioManagementController::class, 'getFtwDates'])->name('bio.ftw-dates');
-    Route::get('/biometric-management/ftw-employees', [BioManagementController::class, 'getFtwEmployees'])->name('bio.ftw-employees');
+    Route::get('/biometric-management/ftw-dates',             [BioManagementController::class, 'getFtwDates'])->name('bio.ftw-dates');
+    Route::get('/biometric-management/ftw-employees',         [BioManagementController::class, 'getFtwEmployees'])->name('bio.ftw-employees');
 });

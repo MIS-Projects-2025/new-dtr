@@ -641,31 +641,6 @@ export default function BioManagement() {
     const [importFile,    setImportFile]    = useState(null);
     const [importLoading, setImportLoading] = useState(false);
     const [importResult,  setImportResult]  = useState(null);
-    const [exportLoading, setExportLoading] = useState(false);
-    const [exportMessage, setExportMessage] = useState('Preparing your export...');
-    const [exportDateFrom, setExportDateFrom] = useState('');
-    const [exportDateTo,   setExportDateTo]   = useState('');
-    const exportPollRef = useRef(null);
-
-    useEffect(() => {
-        return () => {
-            if (exportPollRef.current) clearInterval(exportPollRef.current);
-        };
-    }, []);
-
-    const waitForDownload = (cookieName) => {
-        return new Promise((resolve) => {
-            const poll = setInterval(() => {
-                if (document.cookie.split(';').some(c => c.trim().startsWith(`${cookieName}=`))) {
-                    document.cookie = `${cookieName}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`;
-                    clearInterval(poll);
-                    exportPollRef.current = null;
-                    resolve();
-                }
-            }, 500);
-            exportPollRef.current = poll;
-        });
-    };
 
     const handleImport = async () => {
         if (!importFile) return;
@@ -683,47 +658,6 @@ export default function BioManagement() {
             setImportResult({ error: true, message });
         } finally {
             setImportLoading(false);
-        }
-    };
-
-    const handleExport = async (type) => {
-        if (!exportDateFrom || !exportDateTo || exportLoading) return;
-
-        setExportLoading(true);
-        setExportMessage(
-            type === 'with_breaks'
-                ? 'Preparing export with breaks...'
-                : 'Preparing export without breaks...'
-        );
-
-        const token      = Date.now();
-        const cookieName = `bio_export_ready_${token}`;
-
-        try {
-            const params = new URLSearchParams({
-                date_from:      exportDateFrom,
-                date_to:        exportDateTo,
-                type,
-                download_token: token,
-            });
-
-            const iframe = document.createElement('iframe');
-            iframe.style.display = 'none';
-            iframe.src = route('bio.export') + '?' + params.toString();
-            document.body.appendChild(iframe);
-
-            await waitForDownload(cookieName);
-
-            setTimeout(() => {
-                setExportLoading(false);
-                if (document.body.contains(iframe)) {
-                    document.body.removeChild(iframe);
-                }
-            }, 500);
-
-        } catch (err) {
-            console.error('Export error:', err);
-            setExportLoading(false);
         }
     };
 
@@ -1298,8 +1232,6 @@ const [showAddModal, setShowAddModal] = useState(false);
         <AuthenticatedLayout>
             <Head title="Biometric Management" />
 
-            <LoadingModal show={exportLoading} message={exportMessage} />
-
                 <AddLogModal 
                     show={showAddModal}
                     onClose={() => setShowAddModal(false)}
@@ -1537,86 +1469,61 @@ const [showAddModal, setShowAddModal] = useState(false);
                                     </div>
                                 </div>
 
-                                {/* Export Biometric Logs */}
-                                <div className="flex flex-col rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 overflow-hidden">
-                                    <div className="px-4 py-2.5 border-b border-zinc-200 dark:border-zinc-700 flex-shrink-0">
-                                        <h3 className="text-[11px] font-semibold text-zinc-600 dark:text-zinc-300">
-                                            Export Biometric Logs
-                                        </h3>
-                                    </div>
-                                    <div className="flex-1 flex flex-col gap-4 p-4">
+{/* Export Biometric Logs */}
+<div className="flex flex-col rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 overflow-hidden">
+    <div className="px-4 py-2.5 border-b border-zinc-200 dark:border-zinc-700 flex-shrink-0">
+        <h3 className="text-[11px] font-semibold text-zinc-600 dark:text-zinc-300">
+            Export Biometric Logs
+        </h3>
+    </div>
+    <div className="flex-1 flex flex-col gap-4 p-4">
 
-                                        {/* Guidelines */}
-                                        <div className="rounded-md bg-zinc-100 dark:bg-zinc-700/50 px-3 py-2.5 text-[10px] text-zinc-500 dark:text-zinc-400 space-y-1">
-                                            <p className="font-semibold text-zinc-600 dark:text-zinc-300">Export Guidelines</p>
-                                            <ul className="list-disc list-inside space-y-0.5">
-                                                <li>Select a date range to export biometric logs</li>
-                                                <li><span className="font-medium">With Breaks</span> — includes all break and lunch time slots</li>
-                                                <li><span className="font-medium">Without Breaks</span> — only Time In and Time Out columns</li>
-                                                <li>Only employees with actual punch records will be included</li>
-                                            </ul>
-                                        </div>
+        {/* Guidelines */}
+        <div className="rounded-md bg-zinc-100 dark:bg-zinc-700/50 px-3 py-2.5 text-[10px] text-zinc-500 dark:text-zinc-400 space-y-1">
+            <p className="font-semibold text-zinc-600 dark:text-zinc-300">Export Guidelines</p>
+            <ul className="list-disc list-inside space-y-0.5">
+                <li>Every employee is listed for <span className="font-medium">every date</span> in the range</li>
+                <li>Includes Rest Day, Holiday, On Leave, OB/PB, Absent, Present, Pending</li>
+                <li><span className="font-medium">With Breaks</span> — all break/lunch slots; unscheduled employees show Time In &amp; Time Out only</li>
+                <li><span className="font-medium">Without Breaks</span> — Time In and Time Out columns only</li>
+                <li>Colour-coded rows: green = present, red = absent, yellow = holiday, blue = leave, gray = rest day</li>
+            </ul>
+        </div>
 
-                                        {/* Date range */}
-                                        <div className="flex flex-col gap-2">
-                                            <div className="flex items-center gap-2">
-                                                <label className="text-[10px] text-zinc-500 dark:text-zinc-400 w-16 flex-shrink-0">Date From</label>
-                                                <input
-                                                    type="date"
-                                                    value={exportDateFrom}
-                                                    onChange={(e) => setExportDateFrom(e.target.value)}
-                                                    disabled={exportLoading}
-                                                    className="flex-1 text-[10px] rounded-md border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-zinc-400 disabled:opacity-40"
-                                                />
-                                            </div>
-                                            <div className="flex items-center gap-2">
-                                                <label className="text-[10px] text-zinc-500 dark:text-zinc-400 w-16 flex-shrink-0">Date To</label>
-                                                <input
-                                                    type="date"
-                                                    value={exportDateTo}
-                                                    onChange={(e) => setExportDateTo(e.target.value)}
-                                                    disabled={exportLoading}
-                                                    className="flex-1 text-[10px] rounded-md border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-zinc-400 disabled:opacity-40"
-                                                />
-                                            </div>
-                                        </div>
+        {/* Date range */}
+        <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-2">
+                <label className="text-[10px] text-zinc-500 dark:text-zinc-400 w-16 flex-shrink-0">Date From</label>
+                <input
+                    type="date"
+                    className="flex-1 text-[10px] rounded-md border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-zinc-400"
+                />
+            </div>
+            <div className="flex items-center gap-2">
+                <label className="text-[10px] text-zinc-500 dark:text-zinc-400 w-16 flex-shrink-0">Date To</label>
+                <input
+                    type="date"
+                    className="flex-1 text-[10px] rounded-md border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-zinc-400"
+                />
+            </div>
+        </div>
 
-                                        {/* Export buttons */}
-                                        <div className="flex items-center gap-2 self-end mt-auto">
-                                            <button
-                                                onClick={() => handleExport('without_breaks')}
-                                                disabled={!exportDateFrom || !exportDateTo || exportLoading}
-                                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 text-[10px] font-medium hover:bg-zinc-50 dark:hover:bg-zinc-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                                            >
-                                                {exportLoading ? (
-                                                    <>
-                                                        <svg className="animate-spin w-3 h-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
-                                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-                                                        </svg>
-                                                        Exporting...
-                                                    </>
-                                                ) : 'Without Breaks'}
-                                            </button>
-                                            <button
-                                                onClick={() => handleExport('with_breaks')}
-                                                disabled={!exportDateFrom || !exportDateTo || exportLoading}
-                                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-zinc-800 dark:bg-zinc-200 text-white dark:text-zinc-900 text-[10px] font-medium hover:bg-zinc-700 dark:hover:bg-zinc-300 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                                            >
-                                                {exportLoading ? (
-                                                    <>
-                                                        <svg className="animate-spin w-3 h-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
-                                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-                                                        </svg>
-                                                        Exporting...
-                                                    </>
-                                                ) : 'With Breaks'}
-                                            </button>
-                                        </div>
+        {/* Export buttons */}
+        <div className="flex items-center gap-2 self-end mt-auto">
+            <button
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 text-[10px] font-medium hover:bg-zinc-50 dark:hover:bg-zinc-700 transition-colors"
+            >
+                Without Breaks
+            </button>
+            <button
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-zinc-800 dark:bg-zinc-200 text-white dark:text-zinc-900 text-[10px] font-medium hover:bg-zinc-700 dark:hover:bg-zinc-300 transition-colors"
+            >
+                With Breaks
+            </button>
+        </div>
 
-                                    </div>
-                                </div>
+    </div>
+</div>
 
                             </div>
                         )}
