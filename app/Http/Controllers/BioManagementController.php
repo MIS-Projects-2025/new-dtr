@@ -7,6 +7,12 @@ use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
 use Carbon\Carbon;
 use App\Services\EmployeeService;
+use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
+use PhpOffice\PhpSpreadsheet\Style\Fill;
+use PhpOffice\PhpSpreadsheet\Style\Alignment;
+use PhpOffice\PhpSpreadsheet\Style\Border;
+use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 
 class BioManagementController extends Controller
 {
@@ -618,7 +624,7 @@ public function getFtwEmployees(Request $request)
 
     $existingSet = [];
     foreach (['biometric_logs', 'biometric_logs_manual'] as $table) {
-        \Illuminate\Support\Facades\DB::table($table)
+        DB::table($table)
             ->whereIn('employid', $empIds)
             ->whereBetween('datetime', [$from, $to])
             ->select('employid', 'punch_type')
@@ -701,4 +707,116 @@ private function ftwEmployeeHasMissingLog(string $empId, string $date, int $reco
 
     return !$this->hasExistingLog($empId, $date, $punchType);
 }
+
+public function exportLogs(Request $request)
+    {
+        $request->validate([
+            'date_from' => 'required|date',
+            'date_to'   => 'required|date|after_or_equal:date_from',
+            'type'      => 'required|in:with_breaks,without_breaks',
+        ]);
+
+        $dateFrom = $request->date_from;
+        $dateTo   = $request->date_to;
+        $type     = $request->type;
+
+        if (\Carbon\Carbon::parse($dateFrom)->diffInDays(\Carbon\Carbon::parse($dateTo)) > 31) {
+            return response()->json(['error' => 'Date range cannot exceed 31 days.'], 422);
+        }
+
+        // Generate a unique job ID for polling
+        $jobId = (string) \Illuminate\Support\Str::uuid();
+
+        // Set initial cache state immediately so frontend can start polling
+        \Illuminate\Support\Facades\Cache::put("export_{$jobId}", [
+            'status'   => 'processing',
+            'progress' => 0,
+            'message'  => 'Queued...',
+            'filename' => null,
+        ], now()->addMinutes(10));
+
+        \App\Jobs\ExportBiometricLogs::dispatch($jobId, $dateFrom, $dateTo, $type);
+
+        return response()->json(['job_id' => $jobId]);
+    }
+
+    public function exportProgress(Request $request)
+    {
+        $jobId  = $request->get('job_id');
+        $state  = \Illuminate\Support\Facades\Cache::get("export_{$jobId}");
+
+        if (!$state) {
+            return response()->json([
+                'status'   => 'not_found',
+                'progress' => 0,
+                'message'  => 'Job not found or expired.',
+                'filename' => null,
+            ]);
+        }
+
+        return response()->json($state);
+    }
+
+    public function exportDownload(Request $request)
+    {
+        $jobId = $request->get('job_id');
+        $state = \Illuminate\Support\Facades\Cache::get("export_{$jobId}");
+
+        if (!$state || $state['status'] !== 'done' || empty($state['filename'])) {
+            abort(404, 'Export file not ready or not found.');
+        }
+
+        $path = storage_path('app/exports/' . $state['filename']);
+
+        if (!file_exists($path)) {
+            abort(404, 'Export file missing from disk.');
+        }
+
+        // Clean up cache after download
+        \Illuminate\Support\Facades\Cache::forget("export_{$jobId}");
+
+        return response()->download($path, $state['filename'], [
+            'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        ])->deleteFileAfterSend(true);
+    }
+
+    public function exportTiming(Request $request)
+{
+    $jobId  = $request->get('job_id');
+    $timing = \Illuminate\Support\Facades\Cache::get("export_timing_{$jobId}");
+ 
+    if (!$timing) {
+        return response()->json(['error' => 'No timing data found for this job_id. Run an export first.'], 404);
+    }
+ 
+    return response()->json($timing);
+}
+
+
+/**
+     * Merge a sorted list of row indices into contiguous range strings.
+     * e.g. [2,3,4,7,8,10] → ["A2:E4", "A7:E8", "A10:E10"]
+     */
+    private function buildContiguousRanges(array $rowIndices, string $lastCol): array
+    {
+        if (empty($rowIndices)) return [];
+
+        sort($rowIndices);
+        $ranges = [];
+        $start  = $rowIndices[0];
+        $prev   = $rowIndices[0];
+
+        for ($i = 1; $i < count($rowIndices); $i++) {
+            if ($rowIndices[$i] === $prev + 1) {
+                $prev = $rowIndices[$i];
+            } else {
+                $ranges[] = "A{$start}:{$lastCol}{$prev}";
+                $start    = $rowIndices[$i];
+                $prev     = $rowIndices[$i];
+            }
+        }
+
+        $ranges[] = "A{$start}:{$lastCol}{$prev}";
+        return $ranges;
+    }
 }

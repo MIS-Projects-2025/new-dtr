@@ -3,48 +3,42 @@ import { Head, usePage } from "@inertiajs/react";
 import { useState, useEffect, useRef, useMemo } from "react";
 import axios from 'axios';
 
-const LoadingModal = ({ show, message = 'Preparing your export...' }) => {
+const LoadingModal = ({ show, message = 'Preparing your export...', progress = 0 }) => {
     if (!show) return null;
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
             <div className="absolute inset-0 bg-black/40 dark:bg-black/60 backdrop-blur-sm" />
-            <div className="relative z-10 flex flex-col items-center gap-4 bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl border border-zinc-200 dark:border-zinc-700 px-10 py-8 min-w-[280px]">
+            <div className="relative z-10 flex flex-col items-center gap-4 bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl border border-zinc-200 dark:border-zinc-700 px-10 py-8 min-w-[320px]">
                 <div className="relative w-14 h-14">
-                    <svg
-                        className="animate-spin w-14 h-14 text-zinc-300 dark:text-zinc-700"
-                        xmlns="http://www.w3.org/2000/svg"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                    >
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2.5" />
-                        <path
-                            className="opacity-75"
-                            fill="currentColor"
-                            d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
-                        />
+                    <svg viewBox="0 0 36 36" className="w-14 h-14 -rotate-90">
+                        <circle cx="18" cy="18" r="15.9" fill="none" stroke="currentColor"
+                            className="text-zinc-200 dark:text-zinc-700" strokeWidth="2.5" />
+                        <circle cx="18" cy="18" r="15.9" fill="none" stroke="currentColor"
+                            className="text-zinc-700 dark:text-zinc-300 transition-all duration-500"
+                            strokeWidth="2.5"
+                            strokeDasharray={`${progress}, 100`}
+                            strokeLinecap="round" />
                     </svg>
                     <div className="absolute inset-0 flex items-center justify-center">
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5 text-zinc-500 dark:text-zinc-400">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
-                        </svg>
+                        <span className="text-[11px] font-bold text-zinc-600 dark:text-zinc-300">
+                            {progress}%
+                        </span>
                     </div>
                 </div>
-                <div className="flex flex-col items-center gap-1 text-center">
+                <div className="flex flex-col items-center gap-2 text-center w-full">
                     <p className="text-[13px] font-semibold text-zinc-700 dark:text-zinc-200">
                         {message}
                     </p>
+                    {/* Progress bar */}
+                    <div className="w-full h-1.5 rounded-full bg-zinc-100 dark:bg-zinc-700 overflow-hidden">
+                        <div
+                            className="h-full rounded-full bg-zinc-700 dark:bg-zinc-300 transition-all duration-500"
+                            style={{ width: `${progress}%` }}
+                        />
+                    </div>
                     <p className="text-[10px] text-zinc-400 dark:text-zinc-500">
                         This may take a moment for large date ranges.
                     </p>
-                </div>
-                <div className="flex items-center gap-1.5">
-                    {[0, 1, 2].map(i => (
-                        <span
-                            key={i}
-                            className="w-1.5 h-1.5 rounded-full bg-zinc-400 dark:bg-zinc-500 animate-bounce"
-                            style={{ animationDelay: `${i * 0.15}s` }}
-                        />
-                    ))}
                 </div>
             </div>
         </div>
@@ -641,6 +635,11 @@ export default function BioManagement() {
     const [importFile,    setImportFile]    = useState(null);
     const [importLoading, setImportLoading] = useState(false);
     const [importResult,  setImportResult]  = useState(null);
+    const [exportDateFrom,  setExportDateFrom]  = useState('');
+    const [exportDateTo,    setExportDateTo]    = useState('');
+    const [exportLoading,   setExportLoading]   = useState(false);
+    const [exportMessage,   setExportMessage]   = useState('Preparing your export...');
+    const [exportProgress,  setExportProgress]  = useState(0);
 
     const handleImport = async () => {
         if (!importFile) return;
@@ -658,6 +657,81 @@ export default function BioManagement() {
             setImportResult({ error: true, message });
         } finally {
             setImportLoading(false);
+        }
+    };
+
+const handleExport = async (type) => {
+        if (!exportDateFrom || !exportDateTo) {
+            alert('Please select both Date From and Date To.');
+            return;
+        }
+        if (exportDateTo < exportDateFrom) {
+            alert('Date To must be on or after Date From.');
+            return;
+        }
+
+        const msPerDay = 86400000;
+        const daysDiff = (new Date(exportDateTo) - new Date(exportDateFrom)) / msPerDay;
+        if (daysDiff > 31) {
+            alert('Date range cannot exceed 31 days.');
+            return;
+        }
+
+        setExportLoading(true);
+        setExportProgress(0);
+        setExportMessage('Queuing export job...');
+
+        try {
+            // Dispatch the job
+            const { data } = await axios.get(route('bio.export'), {
+                params: { date_from: exportDateFrom, date_to: exportDateTo, type },
+            });
+
+            const jobId = data.job_id;
+            if (!jobId) throw new Error('No job ID returned from server.');
+
+            // Poll for progress
+            await new Promise((resolve, reject) => {
+                const interval = setInterval(async () => {
+                    try {
+                        const { data: state } = await axios.get(route('bio.export-progress'), {
+                            params: { job_id: jobId },
+                        });
+
+                        setExportProgress(state.progress ?? 0);
+                        setExportMessage(state.message ?? 'Processing...');
+
+                        if (state.status === 'done') {
+                            clearInterval(interval);
+                            resolve(jobId);
+                        } else if (state.status === 'failed' || state.status === 'not_found') {
+                            clearInterval(interval);
+                            reject(new Error(state.message ?? 'Export failed.'));
+                        }
+                    } catch (pollErr) {
+                        clearInterval(interval);
+                        reject(pollErr);
+                    }
+                }, 1500); // poll every 1.5 seconds
+            });
+
+            // Trigger download via window.location (avoids blob memory for large files)
+            setExportMessage('Downloading...');
+            const downloadUrl = route('bio.export-download') + `?job_id=${jobId}`;
+            const link = document.createElement('a');
+            link.href  = downloadUrl;
+            link.setAttribute('download', `biometric_dtr_${exportDateFrom}_to_${exportDateTo}.xlsx`);
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+
+        } catch (err) {
+            console.error('Export error:', err);
+            alert(`Export failed: ${err.message ?? 'Unknown error'}`);
+        } finally {
+            setExportLoading(false);
+            setExportProgress(0);
+            setExportMessage('Preparing your export...');
         }
     };
 
@@ -1469,68 +1543,103 @@ const [showAddModal, setShowAddModal] = useState(false);
                                     </div>
                                 </div>
 
-{/* Export Biometric Logs */}
-<div className="flex flex-col rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 overflow-hidden">
-    <div className="px-4 py-2.5 border-b border-zinc-200 dark:border-zinc-700 flex-shrink-0">
-        <h3 className="text-[11px] font-semibold text-zinc-600 dark:text-zinc-300">
-            Export Biometric Logs
-        </h3>
-    </div>
-    <div className="flex-1 flex flex-col gap-4 p-4">
+                                <LoadingModal show={importLoading} message="Importing biometric data…" progress={0} />
+                                <LoadingModal show={exportLoading} message={exportMessage} progress={exportProgress} />
 
-        {/* Guidelines */}
-        <div className="rounded-md bg-zinc-100 dark:bg-zinc-700/50 px-3 py-2.5 text-[10px] text-zinc-500 dark:text-zinc-400 space-y-1">
-            <p className="font-semibold text-zinc-600 dark:text-zinc-300">Export Guidelines</p>
-            <ul className="list-disc list-inside space-y-0.5">
-                <li>Every employee is listed for <span className="font-medium">every date</span> in the range</li>
-                <li>Includes Rest Day, Holiday, On Leave, OB/PB, Absent, Present, Pending</li>
-                <li><span className="font-medium">With Breaks</span> — all break/lunch slots; unscheduled employees show Time In &amp; Time Out only</li>
-                <li className="font-mono bg-zinc-200 dark:bg-zinc-700 px-1.5 py-0.5 rounded list-none">
-                    <span className="font-medium">Format: </span>EmployeeID | Employee Name | Department | Station | Prodline | Date | Day | Shift | Time in | Break out 1 | Break in 1 | Lunch out | Lunch in | Break out 2 | Break in 2 | Time out | Remarks
-                </li>
-                <li><span className="font-medium">Without Breaks</span> — Time In and Time Out columns only</li>
-                <li className="font-mono bg-zinc-200 dark:bg-zinc-700 px-1.5 py-0.5 rounded list-none">
-                    <span className="font-medium">Format: </span>EmployeeID | Employee Name | Date DTR | Time DTR | Flag
-                </li>
-                <li>Colour-coded rows: green = present, red = absent, yellow = holiday, blue = leave, gray = rest day</li>
-            </ul>
-        </div>
-
-        {/* Date range */}
-        <div className="flex flex-col gap-2">
-            <div className="flex items-center gap-2">
-                <label className="text-[10px] text-zinc-500 dark:text-zinc-400 w-16 flex-shrink-0">Date From</label>
-                <input
-                    type="date"
-                    className="flex-1 text-[10px] rounded-md border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-zinc-400"
-                />
-            </div>
-            <div className="flex items-center gap-2">
-                <label className="text-[10px] text-zinc-500 dark:text-zinc-400 w-16 flex-shrink-0">Date To</label>
-                <input
-                    type="date"
-                    className="flex-1 text-[10px] rounded-md border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-zinc-400"
-                />
-            </div>
-        </div>
-
-        {/* Export buttons */}
-        <div className="flex items-center gap-2 self-end mt-auto">
-            <button
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 text-[10px] font-medium hover:bg-zinc-50 dark:hover:bg-zinc-700 transition-colors"
-            >
-                Without Breaks
-            </button>
-            <button
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-zinc-800 dark:bg-zinc-200 text-white dark:text-zinc-900 text-[10px] font-medium hover:bg-zinc-700 dark:hover:bg-zinc-300 transition-colors"
-            >
-                With Breaks
-            </button>
-        </div>
-
-    </div>
-</div>
-
+                                {/* Export Biometric Logs */}
+                                <div className="flex flex-col rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 overflow-hidden">
+                                    <div className="px-4 py-2.5 border-b border-zinc-200 dark:border-zinc-700 flex-shrink-0">
+                                        <h3 className="text-[11px] font-semibold text-zinc-600 dark:text-zinc-300">
+                                            Export Biometric Logs
+                                        </h3>
+                                    </div>
+                                    <div className="flex-1 flex flex-col gap-4 p-4">
+                                
+                                        {/* Guidelines */}
+                                        <div className="rounded-md bg-zinc-100 dark:bg-zinc-700/50 px-3 py-2.5 text-[10px] text-zinc-500 dark:text-zinc-400 space-y-1">
+                                            <p className="font-semibold text-zinc-600 dark:text-zinc-300">Export Guidelines</p>
+                                            <ul className="list-disc list-inside space-y-0.5">
+                                                <li>Every employee is listed for <span className="font-medium">every date</span> in the range</li>
+                                                <li>Includes Rest Day, Holiday, On Leave, OB/PB, Absent, Present, Pending</li>
+                                                <li><span className="font-medium">With Breaks</span> — all break/lunch slots; max 31-day range</li>
+                                                <li className="font-mono bg-zinc-200 dark:bg-zinc-700 px-1.5 py-0.5 rounded list-none">
+                                                    <span className="font-medium">Format: </span>EmployeeID | Employee Name | Department | Station | Prodline | Date | Day | Shift | Time In | Break Out 1 | Break In 1 | Lunch Out | Lunch In | Break Out 2 | Break In 2 | Time Out | Remarks
+                                                </li>
+                                                <li><span className="font-medium">Without Breaks</span> — Time In and Time Out punch rows only</li>
+                                                <li className="font-mono bg-zinc-200 dark:bg-zinc-700 px-1.5 py-0.5 rounded list-none">
+                                                    <span className="font-medium">Format: </span>EmployeeID | Employee Name | Date DTR | Time DTR | Flag
+                                                </li>
+                                                <li>Colour-coded rows: <span className="text-green-600 dark:text-green-400">■</span> present, <span className="text-red-500 dark:text-red-400">■</span> absent, <span className="text-yellow-500 dark:text-yellow-400">■</span> holiday, <span className="text-blue-500 dark:text-blue-400">■</span> leave, <span className="text-zinc-400">■</span> rest day</li>
+                                            </ul>
+                                        </div>
+                                
+                                        {/* Date range */}
+                                        <div className="flex flex-col gap-2">
+                                            <div className="flex items-center gap-2">
+                                                <label className="text-[10px] text-zinc-500 dark:text-zinc-400 w-16 flex-shrink-0">Date From</label>
+                                                <input
+                                                    type="date"
+                                                    value={exportDateFrom}
+                                                    onChange={(e) => setExportDateFrom(e.target.value)}
+                                                    className="flex-1 text-[10px] rounded-md border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-zinc-400"
+                                                />
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <label className="text-[10px] text-zinc-500 dark:text-zinc-400 w-16 flex-shrink-0">Date To</label>
+                                                <input
+                                                    type="date"
+                                                    value={exportDateTo}
+                                                    min={exportDateFrom || undefined}
+                                                    onChange={(e) => setExportDateTo(e.target.value)}
+                                                    className="flex-1 text-[10px] rounded-md border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-zinc-400"
+                                                />
+                                            </div>
+                                            {exportDateFrom && exportDateTo && exportDateTo >= exportDateFrom && (() => {
+                                                const days = Math.round((new Date(exportDateTo) - new Date(exportDateFrom)) / 86400000) + 1;
+                                                return (
+                                                    <p className={`text-[9px] pl-[72px] ${days > 31 ? 'text-red-500 dark:text-red-400' : 'text-zinc-400 dark:text-zinc-500'}`}>
+                                                        {days} day{days !== 1 ? 's' : ''} selected{days > 31 ? ' — max is 31 days' : ''}
+                                                    </p>
+                                                );
+                                            })()}
+                                        </div>
+                                
+                                        {/* Export buttons */}
+                                        <div className="flex items-center gap-2 self-end mt-auto">
+                                            <button
+                                                onClick={() => handleExport('without_breaks')}
+                                                disabled={exportLoading || !exportDateFrom || !exportDateTo}
+                                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 text-[10px] font-medium hover:bg-zinc-50 dark:hover:bg-zinc-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                            >
+                                                {exportLoading ? (
+                                                    <>
+                                                        <svg className="animate-spin w-3 h-3" fill="none" viewBox="0 0 24 24">
+                                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2.5"/>
+                                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/>
+                                                        </svg>
+                                                        Exporting…
+                                                    </>
+                                                ) : 'Without Breaks'}
+                                            </button>
+                                            <button
+                                                onClick={() => handleExport('with_breaks')}
+                                                disabled={exportLoading || !exportDateFrom || !exportDateTo}
+                                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-zinc-800 dark:bg-zinc-200 text-white dark:text-zinc-900 text-[10px] font-medium hover:bg-zinc-700 dark:hover:bg-zinc-300 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                            >
+                                                {exportLoading ? (
+                                                    <>
+                                                        <svg className="animate-spin w-3 h-3" fill="none" viewBox="0 0 24 24">
+                                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2.5"/>
+                                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/>
+                                                        </svg>
+                                                        Exporting…
+                                                    </>
+                                                ) : 'With Breaks'}
+                                            </button>
+                                        </div>
+                                
+                                    </div>
+                                </div>
                             </div>
                         )}
                     </div>
