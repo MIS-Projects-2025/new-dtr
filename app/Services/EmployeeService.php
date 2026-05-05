@@ -2036,7 +2036,7 @@ public function getDtrRowsForEmployee(
     $preNormalizedLogs = [];
  
     foreach (['biometric_logs', 'biometric_logs_manual'] as $table) {
-        \Illuminate\Support\Facades\DB::table($table)
+        DB::table($table)
             ->where('employid', $employId)
             ->whereBetween('datetime', [$from . ' 00:00:00', $to . ' 23:59:59'])
             ->orderBy('datetime')
@@ -2413,7 +2413,7 @@ public function getExportData(array $filters, string $dateFrom, string $dateTo):
  
     // ── 6. OBs — expand into per-employee/per-date set (one query) ────────
     $obsByEmpDate = [];
-    \App\Models\ObRecord::whereIn('EMPID', $employIds)
+    ObRecord::whereIn('EMPID', $employIds)
         ->whereIn('STATUS', [1, 2])
         ->whereDate('DATE_OB_FROM', '<=', $dateTo)
         ->whereDate('DATE_OB_TO',   '>=', $dateFrom)
@@ -2586,314 +2586,593 @@ public function getExportData(array $filters, string $dateFrom, string $dateTo):
 public function getExportDataStreamed(array $filters, string $dateFrom, string $dateTo): \Generator
 {
     set_time_limit(600);
-    $positions = [1, 2];
- 
-    // ── 1. Employees ─────────────────────────────────────────────────────
-    $employees = $this->employeeRepo->getFilteredEmployees(
-        $filters, $positions, 9999, 1, '', $dateFrom
-    );
+    
+    // Get employees with their department/station info (cached)
+    $employees = Cache::remember('export_employee_list', 3600, function() {
+        return DB::connection('masterlist')
+            ->table('employee_masterlist')
+            ->where('ACCSTATUS', 1)
+            ->whereIn('EMPPOSITION', [1, 2])
+            ->orderBy('EMPNAME', 'asc')
+            ->get(['EMPLOYID', 'EMPNAME', 'DEPARTMENT', 'STATION', 'PRODLINE']);
+    });
+    
+    if ($employees->isEmpty()) {
+        return;
+    }
+    
     $employIds = $employees->pluck('EMPLOYID')->map(fn($id) => (string) $id)->toArray();
- 
-    if (empty($employIds)) return;
- 
-    // ── 2. Schedules + shift codes (two queries) ──────────────────────────
-    $allSchedules = \App\Models\WorkScheduler::whereIn('EMPID', $employIds)
-        ->whereDate('PAYROLL_DATE_START', '<=', $dateTo)
-        ->whereDate('PAYROLL_DATE_END',   '>=', $dateFrom)
-        ->get(['EMPID', 'SCHEDULE', 'PAYROLL_DATE_START', 'PAYROLL_DATE_END', 'SHIFT']);
- 
-    $allShiftIds = $allSchedules
-        ->flatMap(fn($r) => collect($r->SCHEDULE ?? [])->filter()->map(fn($id) => (int) $id))
-        ->unique()->values()->toArray();
- 
-    $shiftCodesMap = empty($allShiftIds)
-        ? collect()
-        : \App\Models\ShiftCode::whereIn('SHIFT_CODE_ID', $allShiftIds)
-            ->get(['SHIFT_CODE_ID', 'SHIFTCODE', 'TIME_WINDOWS', 'SHIFTCODE_DESC'])
-            ->keyBy('SHIFT_CODE_ID');
- 
-    // ── 3. Pre-fetch ALL biometric logs (two queries, widened window) ─────
-    $punchMap = [
-        '0' => 'check_in',  '1' => 'check_out',
-        '2' => 'break_out', '3' => 'break_in',
-        '4' => 'lunch_out', '5' => 'lunch_in',
-        'check_in'  => 'check_in',  'check_out' => 'check_out',
-        'break_out' => 'break_out', 'break_in'  => 'break_in',
-        'lunch_out' => 'lunch_out', 'lunch_in'  => 'lunch_in',
-    ];
- 
-    $from = \Carbon\Carbon::parse($dateFrom)->subDay()->toDateString();
-    $to   = \Carbon\Carbon::parse($dateTo)->addDays(2)->toDateString();
- 
-    // preNormalizedLogs[empId] = [ [...punch], ... ]
-    $preNormalizedLogs = [];
- 
-    foreach (['biometric_logs', 'biometric_logs_manual'] as $table) {
-        \Illuminate\Support\Facades\DB::table($table)
-            ->whereIn('employid', $employIds)
-            ->whereBetween('datetime', [$from . ' 00:00:00', $to . ' 23:59:59'])
-            ->orderBy('datetime')
-            ->select(['employid', 'datetime', 'punch_type'])
-            ->each(function ($row) use (&$preNormalizedLogs, $punchMap) {
-                $dt = \Carbon\Carbon::parse($row->datetime);
-                $preNormalizedLogs[(string) $row->employid][] = [
-                    'employid' => (string) $row->employid,
-                    'datetime' => $row->datetime,
-                    'date'     => $dt->toDateString(),
-                    'time'     => $dt->format('H:i'),
-                    'type'     => $punchMap[(string) $row->punch_type] ?? 'check_in',
-                    'source'   => 'mixed',
+    
+    // Get all dates
+    $dates = [];
+    $current = Carbon::parse($dateFrom);
+    $end = Carbon::parse($dateTo);
+    while ($current->lte($end)) {
+        $dates[] = $current->toDateString();
+        $current->addDay();
+    }
+    
+    // Get leaves and holidays once
+    $leavesByEmpDate = $this->getLeavesByDate($employIds, $dateFrom, $dateTo);
+    $holidays = $this->getHolidaysByDate($dateFrom, $dateTo);
+    
+    // Process logs in chunks to avoid memory issues
+    $chunkSize = 500; // Process 500 employees at a time
+    $employeeChunks = array_chunk($employIds, $chunkSize);
+    
+    foreach ($dates as $date) {
+        $batchRows = [];
+        $isHoliday = isset($holidays[$date]);
+        
+        // For each chunk of employees, query logs for this specific date
+        foreach ($employeeChunks as $chunk) {
+            $fromDateTime = $date . ' 00:00:00';
+            $toDateTime = $date . ' 23:59:59';
+            
+            // UNION query to get logs from both tables in ONE query
+            $logsQuery = "
+                SELECT employid, datetime, punch_type FROM biometric_logs 
+                WHERE employid IN ('" . implode("','", $chunk) . "') 
+                AND datetime BETWEEN ? AND ?
+                UNION ALL
+                SELECT employid, datetime, punch_type FROM biometric_logs_manual 
+                WHERE employid IN ('" . implode("','", $chunk) . "') 
+                AND datetime BETWEEN ? AND ?
+            ";
+            
+            $dayLogs = DB::connection('dtr')->select($logsQuery, [
+                $fromDateTime, $toDateTime,
+                $fromDateTime, $toDateTime
+            ]);
+            
+            // Index logs by employid for this chunk
+            $logsByEmp = [];
+            foreach ($dayLogs as $log) {
+                $empId = (string) $log->employid;
+                $time = substr($log->datetime, 11, 5);
+                $logsByEmp[$empId][] = ['time' => $time, 'type' => $log->punch_type];
+            }
+            
+            // Build rows for employees in this chunk
+            $employeesInChunk = $employees->whereIn('EMPLOYID', $chunk);
+            foreach ($employeesInChunk as $employee) {
+                $empId = (string) $employee->EMPLOYID;
+                $dayLogs = $logsByEmp[$empId] ?? [];
+                
+                $actualLogs = $this->processLogsIntoSlots($dayLogs);
+                $hasPunch = !empty(array_filter($actualLogs));
+                $isOnLeave = isset($leavesByEmpDate[$empId][$date]);
+                
+                $remarks = $this->determineRemarks($hasPunch, $isHoliday, $isOnLeave, $date);
+                
+                $batchRows[] = [
+                    'EMPLOYID' => $empId,
+                    'EMPNAME' => $employee->EMPNAME,
+                    'DEPARTMENT' => $employee->DEPARTMENT ?? '',
+                    'STATION' => $employee->STATION ?? '',
+                    'PRODLINE' => $employee->PRODLINE ?? '',
+                    'DATE' => $date,
+                    'DAY' => Carbon::parse($date)->format('D'),
+                    'SHIFT_TYPE' => 'N/A',
+                    'IS_SHIFTING' => false,
+                    'REMARKS' => $remarks,
+                    'Time In (actual)' => $actualLogs['time_in'],
+                    'Break Out 1 (actual)' => $actualLogs['break_out_1'],
+                    'Break In 1 (actual)' => $actualLogs['break_in_1'],
+                    'Lunch Out (actual)' => $actualLogs['lunch_out'],
+                    'Lunch In (actual)' => $actualLogs['lunch_in'],
+                    'Break Out 2 (actual)' => $actualLogs['break_out_2'],
+                    'Break In 2 (actual)' => $actualLogs['break_in_2'],
+                    'Time Out (actual)' => $actualLogs['time_out'],
                 ];
-            });
-    }
- 
-    foreach ($preNormalizedLogs as &$logs) {
-        usort($logs, fn($a, $b) => strcmp($a['datetime'], $b['datetime']));
-    }
-    unset($logs);
- 
-    // ── FIX A: Pre-index logs by (empId, date) ────────────────────────────
-    // logsByEmpDate[empId][date] = true  (just presence flag for fast skip)
-    // The actual filtered logs are still resolved via resolveLogsFromPreNormalized,
-    // but we can now short-circuit employees with no punches on a given date
-    // without scanning their entire punch array.
-    $empHasPunchOnDate = []; // [empId][date] = true
-    foreach ($preNormalizedLogs as $empId => $logs) {
-        foreach ($logs as $log) {
-            // Mark the log's date AND the day before/after for night-shift overlap
-            $empHasPunchOnDate[$empId][$log['date']] = true;
+            }
         }
+        
+        yield ['date' => $date, 'rows' => $batchRows];
     }
- 
-    // ── 4. Leaves (one query, per-date expansion) ─────────────────────────
-    $leavesByEmpDate = [];
-    \App\Models\EmployeeLeave::whereIn('EMPLOYID', $employIds)
+}
+
+private function getLeavesByDate(array $employIds, string $dateFrom, string $dateTo): array
+{
+    $leaves = [];
+    $records = DB::connection('leave')
+        ->table('employee_leaves')
+        ->whereIn('EMPLOYID', $employIds)
         ->where('LEAVESTATUS', 'approved')
         ->whereDate('DATESTART', '<=', $dateTo)
-        ->whereDate('DATEEND',   '>=', $dateFrom)
-        ->get(['EMPLOYID', 'DATESTART', 'DATEEND'])
-        ->each(function ($leave) use (&$leavesByEmpDate, $dateFrom, $dateTo) {
-            $empId = (string) $leave->EMPLOYID;
-            $s     = max(substr((string) $leave->DATESTART, 0, 10), $dateFrom);
-            $e     = min(substr((string) $leave->DATEEND,   0, 10), $dateTo);
-            for ($ts = strtotime($s); $ts <= strtotime($e); $ts += 86400) {
-                $leavesByEmpDate[$empId][date('Y-m-d', $ts)] = true;
+        ->whereDate('DATEEND', '>=', $dateFrom)
+        ->get(['EMPLOYID', 'DATESTART', 'DATEEND']);
+    
+    foreach ($records as $leave) {
+        $empId = (string) $leave->EMPLOYID;
+        $start = max(substr($leave->DATESTART, 0, 10), $dateFrom);
+        $end = min(substr($leave->DATEEND, 0, 10), $dateTo);
+        $startTs = strtotime($start);
+        $endTs = strtotime($end);
+        
+        for ($ts = $startTs; $ts <= $endTs; $ts += 86400) {
+            $leaves[$empId][date('Y-m-d', $ts)] = true;
+        }
+    }
+    
+    return $leaves;
+}
+
+private function getHolidaysByDate(string $dateFrom, string $dateTo): array
+{
+    return DB::connection('calendar')
+        ->table('holidays')
+        ->whereBetween('HOLIDAY_DATE', [$dateFrom, $dateTo])
+        ->pluck('HOLIDAY_NAME', 'HOLIDAY_DATE')
+        ->mapWithKeys(fn($name, $date) => [substr($date, 0, 10) => $name])
+        ->toArray();
+}
+
+private function processLogsIntoSlots(array $logs): array
+{
+    $slots = [
+        'time_in' => null, 'time_out' => null,
+        'break_out_1' => null, 'break_in_1' => null,
+        'lunch_out' => null, 'lunch_in' => null,
+        'break_out_2' => null, 'break_in_2' => null,
+    ];
+    
+    $breakOutSlots = ['break_out_1', 'lunch_out', 'break_out_2'];
+    $breakInSlots = ['break_in_1', 'lunch_in', 'break_in_2'];
+    
+    foreach ($logs as $log) {
+        $time = $log['time'];
+        $type = $log['type'];
+        
+        switch ($type) {
+            case 'check_in':
+                if (!$slots['time_in']) $slots['time_in'] = $time;
+                break;
+            case 'check_out':
+                $slots['time_out'] = $time;
+                break;
+            case 'break_out':
+                foreach ($breakOutSlots as $slot) {
+                    if (!$slots[$slot]) {
+                        $slots[$slot] = $time;
+                        break;
+                    }
+                }
+                break;
+            case 'break_in':
+                foreach ($breakInSlots as $slot) {
+                    if (!$slots[$slot]) {
+                        $slots[$slot] = $time;
+                        break;
+                    }
+                }
+                break;
+        }
+    }
+    
+    return $slots;
+}
+
+private function determineRemarks(bool $hasPunch, bool $isHoliday, bool $isOnLeave, string $date): string
+{
+    if ($hasPunch) {
+        if ($isHoliday) return 'Present';
+        if ($isOnLeave) return 'On Leave (Present)';
+        return 'Present';
+    }
+    
+    if ($isHoliday) return 'Holiday';
+    if ($isOnLeave) return 'On Leave';
+    if ($date < date('Y-m-d')) return 'Absent';
+    return 'Pending';
+}
+
+// In EmployeeService.php, add this method:
+public function getExportDataOptimized(array $filters, string $dateFrom, string $dateTo): array
+{
+    // Use a single optimized query with JOIN instead of PHP processing
+    return DB::table('employee_masterlist as e')
+        ->leftJoin('biometric_logs as b', function($join) use ($dateFrom, $dateTo) {
+            $join->on('e.EMPLOYID', '=', 'b.employid')
+                ->whereBetween('b.datetime', [$dateFrom, $dateTo . ' 23:59:59']);
+        })
+        ->whereIn('e.EMPPOSITION', [1, 2])
+        ->where('e.ACCSTATUS', 1)
+        ->orderBy('e.EMPNAME', 'asc')  // Sort by name at database level
+        ->orderBy('b.datetime', 'asc')
+        ->get(['e.EMPLOYID', 'e.EMPNAME', 'e.DEPARTMENT', 'b.datetime', 'b.punch_type'])
+        ->groupBy('EMPLOYID')
+        ->toArray();
+}
+
+/**
+ * ULTRA FAST export - does all the work in SQL
+ */
+/**
+ * ULTRA FAST export - includes all data (schedules, leaves, OB, rest days)
+ */
+public function getExportDataUltraFast(string $dateFrom, string $dateTo, string $type): array
+{
+    set_time_limit(600);
+    
+    // Get employee masterlist from 'masterlist' connection
+    $employees = DB::connection('masterlist')
+        ->table('employee_masterlist')
+        ->where('ACCSTATUS', 1)
+        ->whereIn('EMPPOSITION', [1, 2])
+        ->orderBy('EMPNAME', 'asc')
+        ->get(['EMPLOYID', 'EMPNAME', 'DEPARTMENT', 'STATION', 'PRODLINE']);
+    
+    if ($employees->isEmpty()) {
+        return [];
+    }
+    
+    $employIds = $employees->pluck('EMPLOYID')->map(fn($id) => (string) $id)->toArray();
+    
+    // Get all dates in range
+    $dates = [];
+    $current = Carbon::parse($dateFrom);
+    $end = Carbon::parse($dateTo);
+    while ($current->lte($end)) {
+        $dates[] = $current->toDateString();
+        $current->addDay();
+    }
+    
+    // ─────────────────────────────────────────────────────────────────
+    // 1. FETCH ALL LOGS (Bio + Manual) - SINGLE QUERY
+    // ─────────────────────────────────────────────────────────────────
+    $fromDateTime = $dateFrom . ' 00:00:00';
+    $toDateTime = $dateTo . ' 23:59:59';
+    
+    $allLogs = collect();
+    
+    $bioLogs = DB::connection('dtr')
+        ->table('biometric_logs')
+        ->whereIn('employid', $employIds)
+        ->whereBetween('datetime', [$fromDateTime, $toDateTime])
+        ->get(['employid', 'datetime', 'punch_type']);
+    
+    $manualLogs = DB::connection('dtr')
+        ->table('biometric_logs_manual')
+        ->whereIn('employid', $employIds)
+        ->whereBetween('datetime', [$fromDateTime, $toDateTime])
+        ->get(['employid', 'datetime', 'punch_type']);
+    
+    $allLogs = $bioLogs->concat($manualLogs);
+    
+    // Index logs by employee and date
+    $logsByEmpDate = [];
+    foreach ($allLogs as $log) {
+        $empId = (string) $log->employid;
+        $date = substr($log->datetime, 0, 10);
+        $time = substr($log->datetime, 11, 5);
+        $punchType = $log->punch_type;
+        
+        if (!isset($logsByEmpDate[$empId][$date])) {
+            $logsByEmpDate[$empId][$date] = [];
+        }
+        $logsByEmpDate[$empId][$date][] = ['time' => $time, 'type' => $punchType];
+    }
+    
+    // ─────────────────────────────────────────────────────────────────
+    // 2. FETCH SCHEDULES & SHIFT CODES
+    // ─────────────────────────────────────────────────────────────────
+    $schedules = DB::connection('calendar')
+        ->table('work_scheduler')
+        ->whereIn('EMPID', $employIds)
+        ->whereDate('PAYROLL_DATE_START', '<=', $dateTo)
+        ->whereDate('PAYROLL_DATE_END', '>=', $dateFrom)
+        ->get(['EMPID', 'SCHEDULE', 'PAYROLL_DATE_START', 'PAYROLL_DATE_END', 'SHIFT']);
+    
+    // Get all shift codes
+    $allShiftIds = [];
+    foreach ($schedules as $sch) {
+        $scheduleArray = json_decode($sch->SCHEDULE, true) ?? [];
+        foreach ($scheduleArray as $shiftId) {
+            if ($shiftId) $allShiftIds[] = (int) $shiftId;
+        }
+    }
+    $allShiftIds = array_unique($allShiftIds);
+    
+    $shiftCodes = [];
+    if (!empty($allShiftIds)) {
+        $shiftCodes = DB::connection('calendar')
+            ->table('shift_codes')
+            ->whereIn('SHIFT_CODE_ID', $allShiftIds)
+            ->get(['SHIFT_CODE_ID', 'SHIFTCODE', 'TIME_WINDOWS'])
+            ->keyBy('SHIFT_CODE_ID');
+    }
+    
+    // Build schedule cache
+    $scheduleByEmpDate = [];
+    foreach ($schedules as $sch) {
+        $empId = (string) $sch->EMPID;
+        $scheduleArray = json_decode($sch->SCHEDULE, true) ?? [];
+        $shiftField = (int) ($sch->SHIFT ?? 0);
+        $startDate = substr($sch->PAYROLL_DATE_START, 0, 10);
+        $startTs = strtotime($startDate);
+        
+        foreach ($dates as $date) {
+            if ($date < $startDate || $date > substr($sch->PAYROLL_DATE_END, 0, 10)) {
+                continue;
             }
-        });
- 
-    // ── 5. Holidays (one query) ───────────────────────────────────────────
-    $holidaySet = \App\Models\Holiday::whereBetween('HOLIDAY_DATE', [$dateFrom, $dateTo])
-        ->get(['HOLIDAY_DATE', 'HOLIDAY_NAME'])
-        ->mapWithKeys(fn($h) => [substr((string) $h->HOLIDAY_DATE, 0, 10) => $h->HOLIDAY_NAME])
-        ->all();
- 
-    // ── 6. OBs (one query, per-date expansion) ────────────────────────────
-    $obsByEmpDate = [];
-    \App\Models\ObRecord::whereIn('EMPID', $employIds)
-        ->whereIn('STATUS', [1, 2])
-        ->whereDate('DATE_OB_FROM', '<=', $dateTo)
-        ->whereDate('DATE_OB_TO',   '>=', $dateFrom)
-        ->get(['EMPID', 'TIME_FROM', 'TIME_TO', 'FORM_TYPE', 'DATE_OB_FROM', 'DATE_OB_TO'])
-        ->each(function ($ob) use (&$obsByEmpDate, $dateFrom, $dateTo) {
-            $empId    = (string) $ob->EMPID;
-            $s        = max(substr((string) $ob->DATE_OB_FROM, 0, 10), $dateFrom);
-            $e        = min(substr((string) $ob->DATE_OB_TO,   0, 10), $dateTo);
-            $timeFrom = substr((string) ($ob->TIME_FROM ?? ''), 0, 5);
-            $timeTo   = substr((string) ($ob->TIME_TO   ?? ''), 0, 5);
-            for ($ts = strtotime($s); $ts <= strtotime($e); $ts += 86400) {
-                $obsByEmpDate[$empId][date('Y-m-d', $ts)] = [
-                    'time_from' => $timeFrom,
-                    'time_to'   => $timeTo,
+            $ts = strtotime($date);
+            $dayIndex = (int) (($ts - $startTs) / 86400) + 1;
+            $shiftId = (int) ($scheduleArray[$dayIndex] ?? $scheduleArray[(string) $dayIndex] ?? 0);
+            $sc = $shiftId ? ($shiftCodes[$shiftId] ?? null) : null;
+            
+            $tw = [];
+            $shiftCode = 'N/A';
+            $isRestDay = false;
+            $shiftType = 'N/A';
+            $scheduleType = 'Normal';
+            
+            if ($sc) {
+                $rawTw = $sc->TIME_WINDOWS;
+                $tw = is_array($rawTw) ? $rawTw : (json_decode($rawTw, true) ?? []);
+                $shiftCode = $sc->SHIFTCODE ?? 'N/A';
+                $isRestDay = str_contains(strtoupper($shiftCode), 'RD');
+                
+                if (!empty($tw[0])) {
+                    $hour = (int) explode(':', $tw[0])[0];
+                    if ($hour >= 18 || $hour < 6) $shiftType = 'Night Shift';
+                    elseif ($hour >= 12) $shiftType = 'Afternoon Shift';
+                    else $shiftType = 'Day Shift';
+                }
+                
+                // Determine if shifting schedule
+                if (!empty($tw[0]) && !empty($tw[7])) {
+                    $startMins = (int) explode(':', $tw[0])[0] * 60 + (int) explode(':', $tw[0])[1];
+                    $endMins = (int) explode(':', $tw[7])[0] * 60 + (int) explode(':', $tw[7])[1];
+                    if ($endMins < $startMins) $endMins += 1440;
+                    $duration = $endMins - $startMins;
+                    if ($shiftField !== 1 && $duration >= 720) $scheduleType = 'Shifting';
+                }
+                if ($shiftField === 2) $scheduleType = 'Shifting';
+            }
+            
+            $scheduleByEmpDate[$empId][$date] = [
+                'tw' => $tw,
+                'shift_code' => $shiftCode,
+                'shift_type' => $shiftType,
+                'is_rest_day' => $isRestDay,
+                'schedule_type' => $scheduleType,
+                'is_shifting' => $scheduleType === 'Shifting',
+            ];
+        }
+    }
+    
+    // ─────────────────────────────────────────────────────────────────
+    // 3. FETCH LEAVES
+    // ─────────────────────────────────────────────────────────────────
+    $leaveMap = [];
+    try {
+        $leaves = DB::connection('leave')
+            ->table('employee_leaves')
+            ->whereIn('EMPLOYID', $employIds)
+            ->where('LEAVESTATUS', 'approved')
+            ->whereDate('DATESTART', '<=', $dateTo)
+            ->whereDate('DATEEND', '>=', $dateFrom)
+            ->get(['EMPLOYID', 'DATESTART', 'DATEEND']);
+        
+        foreach ($leaves as $leave) {
+            $empId = (string) $leave->EMPLOYID;
+            $start = max(substr($leave->DATESTART, 0, 10), $dateFrom);
+            $end = min(substr($leave->DATEEND, 0, 10), $dateTo);
+            $startTs = strtotime($start);
+            $endTs = strtotime($end);
+            for ($ts = $startTs; $ts <= $endTs; $ts += 86400) {
+                $leaveMap[$empId][date('Y-m-d', $ts)] = true;
+            }
+        }
+    } catch (\Exception $e) {
+        \Log::warning('Could not fetch leaves: ' . $e->getMessage());
+    }
+    
+    // ─────────────────────────────────────────────────────────────────
+    // 4. FETCH HOLIDAYS
+    // ─────────────────────────────────────────────────────────────────
+    $holidays = [];
+    try {
+        $holidays = DB::connection('calendar')
+            ->table('holidays')
+            ->whereBetween('HOLIDAY_DATE', [$dateFrom, $dateTo])
+            ->pluck('HOLIDAY_NAME', 'HOLIDAY_DATE')
+            ->mapWithKeys(fn($name, $date) => [substr($date, 0, 10) => $name])
+            ->toArray();
+    } catch (\Exception $e) {
+        \Log::warning('Could not fetch holidays: ' . $e->getMessage());
+    }
+    
+    // ─────────────────────────────────────────────────────────────────
+    // 5. FETCH OB RECORDS
+    // ─────────────────────────────────────────────────────────────────
+    $obMap = [];
+    try {
+        $obs = DB::connection('ob')
+            ->table('ob_record')
+            ->whereIn('EMPID', $employIds)
+            ->whereIn('STATUS', [1, 2])
+            ->whereDate('DATE_OB_FROM', '<=', $dateTo)
+            ->whereDate('DATE_OB_TO', '>=', $dateFrom)
+            ->get(['EMPID', 'TIME_FROM', 'TIME_TO', 'FORM_TYPE', 'DATE_OB_FROM', 'DATE_OB_TO']);
+        
+        foreach ($obs as $ob) {
+            $empId = (string) $ob->EMPID;
+            $start = max(substr($ob->DATE_OB_FROM, 0, 10), $dateFrom);
+            $end = min(substr($ob->DATE_OB_TO, 0, 10), $dateTo);
+            $startTs = strtotime($start);
+            $endTs = strtotime($end);
+            for ($ts = $startTs; $ts <= $endTs; $ts += 86400) {
+                $obMap[$empId][date('Y-m-d', $ts)] = [
+                    'time_from' => substr($ob->TIME_FROM ?? '', 0, 5),
+                    'time_to' => substr($ob->TIME_TO ?? '', 0, 5),
                     'form_type' => $ob->FORM_TYPE,
                 ];
             }
-        });
- 
-    // ── 7. Schedule metadata cache per emp+date (pure PHP) ────────────────
-    $scheduleByEmpDate = [];
- 
-    foreach ($allSchedules as $sch) {
-        $empId      = (string) $sch->EMPID;
-        $schedule   = $sch->SCHEDULE ?? [];
-        $shiftField = (int) ($sch->SHIFT ?? 0);
-        $start      = substr((string) $sch->PAYROLL_DATE_START, 0, 10);
-        $startTs    = strtotime($start);
-        $iterStart  = max($start, $dateFrom);
-        $iterEnd    = min(substr((string) $sch->PAYROLL_DATE_END, 0, 10), $dateTo);
- 
-        for ($ts = strtotime($iterStart); $ts <= strtotime($iterEnd); $ts += 86400) {
-            $d        = date('Y-m-d', $ts);
-            $dayIndex = (int) (($ts - $startTs) / 86400) + 1;
-            $shiftId  = (int) ($schedule[(string) $dayIndex] ?? $schedule[$dayIndex] ?? 0);
-            $sc       = $shiftId ? $shiftCodesMap->get($shiftId) : null;
- 
-            $tw           = [];
-            $scheduleType = 'Normal';
-            $shiftCode    = 'N/A';
-            $isRestDay    = false;
-            $shiftType    = 'N/A';
- 
-            if ($sc) {
-                $rawTw     = $sc->TIME_WINDOWS;
-                $tw        = is_array($rawTw) ? $rawTw : (is_string($rawTw) ? (json_decode($rawTw, true) ?? []) : []);
-                $shiftCode = $sc->SHIFTCODE ?? 'N/A';
-                $isRestDay = str_contains(strtoupper($shiftCode), 'RD');
- 
-                if (!empty($tw[0]) && !empty($tw[7])) {
-                    $dur = $this->timeToMinutes($tw[7]) - $this->timeToMinutes($tw[0]);
-                    if ($dur < 0) $dur += 1440;
-                    if ($shiftField !== 1 && $dur >= 720) $scheduleType = 'Shifting';
-                }
-                if ($shiftField === 2) $scheduleType = 'Shifting';
- 
-                if (!empty($tw[0])) {
-                    $h         = (int) explode(':', $tw[0])[0];
-                    $shiftType = match (true) {
-                        $h >= 18 || $h < 6 => 'Night Shift',
-                        $h >= 12           => 'Afternoon Shift',
-                        default            => 'Day Shift',
-                    };
+        }
+    } catch (\Exception $e) {
+        \Log::warning('Could not fetch OB records: ' . $e->getMessage());
+    }
+    
+    // ─────────────────────────────────────────────────────────────────
+    // 6. BUILD RESULTS
+    // ─────────────────────────────────────────────────────────────────
+    $result = [];
+    $dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    
+    foreach ($employees as $employee) {
+        $empId = (string) $employee->EMPLOYID;
+        
+        foreach ($dates as $date) {
+            $dayLogs = $logsByEmpDate[$empId][$date] ?? [];
+            $schedule = $scheduleByEmpDate[$empId][$date] ?? [
+                'tw' => [], 'shift_code' => 'N/A', 'shift_type' => 'N/A',
+                'is_rest_day' => false, 'schedule_type' => 'Normal', 'is_shifting' => false
+            ];
+            $isOnLeave = isset($leaveMap[$empId][$date]);
+            $isHoliday = isset($holidays[$date]);
+            $obInfo = $obMap[$empId][$date] ?? null;
+            
+            // Process logs into time slots
+            $actualLogs = [
+                'time_in' => null, 'time_out' => null,
+                'break_out_1' => null, 'break_in_1' => null,
+                'lunch_out' => null, 'lunch_in' => null,
+                'break_out_2' => null, 'break_in_2' => null,
+            ];
+            
+            $breakOutSlots = ['break_out_1', 'lunch_out', 'break_out_2'];
+            $breakInSlots = ['break_in_1', 'lunch_in', 'break_in_2'];
+            
+            foreach ($dayLogs as $log) {
+                $time = $log['time'];
+                $type = $log['type'];
+                
+                switch ($type) {
+                    case 'check_in':
+                    case '0':
+                        if (!$actualLogs['time_in']) $actualLogs['time_in'] = $time;
+                        break;
+                    case 'check_out':
+                    case '1':
+                        $actualLogs['time_out'] = $time;
+                        break;
+                    case 'break_out':
+                    case '2':
+                        foreach ($breakOutSlots as $slot) {
+                            if (!$actualLogs[$slot]) {
+                                $actualLogs[$slot] = $time;
+                                break;
+                            }
+                        }
+                        break;
+                    case 'break_in':
+                    case '3':
+                        foreach ($breakInSlots as $slot) {
+                            if (!$actualLogs[$slot]) {
+                                $actualLogs[$slot] = $time;
+                                break;
+                            }
+                        }
+                        break;
                 }
             }
- 
-            $scheduleByEmpDate[$empId][$d] = compact(
-                'tw', 'scheduleType', 'shiftCode', 'isRestDay', 'shiftType', 'shiftField'
-            );
-        }
-    }
- 
-    unset($allSchedules, $shiftCodesMap);
- 
-    // ── 8. Iterate dates — yield one batch per date ───────────────────────
-    $current = \Carbon\Carbon::parse($dateFrom);
-    $end     = \Carbon\Carbon::parse($dateTo);
- 
-    while ($current->lte($end)) {
-        $date        = $current->toDateString();
-        $isHoliday   = isset($holidaySet[$date]);
-        $holidayName = $isHoliday ? $holidaySet[$date] : null;
- 
-        // ── FIX B: Build twMap/schMap only for employees that MIGHT have
-        //    activity on this date. Employees with no punches, no leave,
-        //    no OB, and no holiday still need to appear in the export (as
-        //    Absent/Rest Day rows), so we cannot skip them entirely —
-        //    but we CAN skip the expensive resolveLogsFromPreNormalized
-        //    call for them and return empty slots directly.
-        //
-        //    "Might have activity" = has a punch on date OR adjacent date
-        //    (for night-shift overlap) OR is on leave OR has an OB record.
-        $yesterday = date('Y-m-d', strtotime($date . ' -1 day'));
-        $tomorrow  = date('Y-m-d', strtotime($date . ' +1 day'));
- 
-        $activeEmpIds = [];   // need full log resolution
-        $inactiveEmpIds = []; // can skip log resolution
- 
-        foreach ($employIds as $empId) {
-            $hasPunch = isset($empHasPunchOnDate[$empId][$date])
-                     || isset($empHasPunchOnDate[$empId][$yesterday])
-                     || isset($empHasPunchOnDate[$empId][$tomorrow]);
-            $hasLeave = isset($leavesByEmpDate[$empId][$date]);
-            $hasOb    = isset($obsByEmpDate[$empId][$date]);
- 
-            if ($hasPunch || $hasLeave || $hasOb || $isHoliday) {
-                $activeEmpIds[] = $empId;
+            
+            // Determine remarks
+            $hasAnyPunch = false;
+            foreach ($actualLogs as $value) {
+                if ($value && $value !== '--:--') {
+                    $hasAnyPunch = true;
+                    break;
+                }
+            }
+            
+            $effectiveRestDay = $schedule['is_rest_day'] || $isHoliday;
+            $expectedTimeIn = $schedule['tw'][0] ?? null;
+            $expectedTimeOut = $schedule['tw'][7] ?? null;
+            
+            // OB presence check
+            $isObPresent = false;
+            if ($obInfo && in_array(strtolower($obInfo['form_type'] ?? ''), ['ob', 'pb'])) {
+                $obFrom = isset($obInfo['time_from']) ? (int) explode(':', $obInfo['time_from'])[0] * 60 + (int) explode(':', $obInfo['time_from'])[1] : 0;
+                $obTo = isset($obInfo['time_to']) ? (int) explode(':', $obInfo['time_to'])[0] * 60 + (int) explode(':', $obInfo['time_to'])[1] : 0;
+                if ($expectedTimeIn) {
+                    $expIn = (int) explode(':', $expectedTimeIn)[0] * 60 + (int) explode(':', $expectedTimeIn)[1];
+                    if ($expIn >= $obFrom && $expIn <= $obTo) $isObPresent = true;
+                }
+                if (!$isObPresent && $expectedTimeOut) {
+                    $expOut = (int) explode(':', $expectedTimeOut)[0] * 60 + (int) explode(':', $expectedTimeOut)[1];
+                    if ($expOut >= $obFrom && $expOut <= $obTo) $isObPresent = true;
+                }
+            }
+            
+            // Determine final remarks
+            if ($hasAnyPunch || $isObPresent) {
+                if ($effectiveRestDay || $isHoliday) $remarks = 'Present';
+                elseif ($isOnLeave && $actualLogs['time_in']) $remarks = 'On Leave (Present)';
+                elseif ($actualLogs['time_in'] && $expectedTimeIn) {
+                    $actualMins = (int) explode(':', $actualLogs['time_in'])[0] * 60 + (int) explode(':', $actualLogs['time_in'])[1];
+                    $expectedMins = (int) explode(':', $expectedTimeIn)[0] * 60 + (int) explode(':', $expectedTimeIn)[1];
+                    if ($actualMins < $expectedMins - 720) $actualMins += 1440;
+                    $remarks = $actualMins > $expectedMins ? 'Late' : 'Present';
+                } else {
+                    $remarks = 'Present';
+                }
             } else {
-                $inactiveEmpIds[] = $empId;
+                if ($isHoliday) $remarks = 'Holiday';
+                elseif ($effectiveRestDay) $remarks = 'Rest Day';
+                elseif ($isOnLeave) $remarks = 'On Leave';
+                elseif ($expectedTimeIn && $date < date('Y-m-d')) $remarks = 'Absent';
+                elseif ($expectedTimeIn) $remarks = 'Pending';
+                else $remarks = 'Absent';
             }
-        }
- 
-        // Resolve logs only for employees with actual activity
-        $twMap  = [];
-        $schMap = [];
-        foreach ($activeEmpIds as $empId) {
-            $s              = $scheduleByEmpDate[$empId][$date] ?? null;
-            $twMap[$empId]  = $s['tw']          ?? [];
-            $schMap[$empId] = $s['scheduleType'] ?? 'Normal';
-        }
- 
-        $actualLogsMap = !empty($activeEmpIds)
-            ? $this->dtrLogService->resolveLogsFromPreNormalized(
-                $activeEmpIds, $twMap, $schMap, $date, $preNormalizedLogs
-              )
-            : [];
- 
-        // Inactive employees get empty slots (no punches, no leave, no OB)
-        foreach ($inactiveEmpIds as $empId) {
-            $actualLogsMap[$empId] = [
-                'time_in'     => null, 'break_out_1' => null, 'break_in_1'  => null,
-                'lunch_out'   => null, 'lunch_in'    => null, 'break_out_2' => null,
-                'break_in_2'  => null, 'time_out'    => null,
+            
+            $result[] = (object)[
+                'EMPLOYID' => $empId,
+                'EMPNAME' => $employee->EMPNAME,
+                'DEPARTMENT' => $employee->DEPARTMENT ?? '',
+                'STATION' => $employee->STATION ?? '',
+                'PRODLINE' => $employee->PRODLINE ?? '',
+                'log_date' => $date,
+                'day' => $dayNames[date('w', strtotime($date))],
+                'shift_type' => $schedule['shift_type'],
+                'shift_code' => $schedule['shift_code'],
+                'is_shifting' => $schedule['is_shifting'],
+                'remarks' => $remarks,
+                'time_in' => $actualLogs['time_in'],
+                'break_out_1' => $actualLogs['break_out_1'],
+                'break_in_1' => $actualLogs['break_in_1'],
+                'lunch_out' => $actualLogs['lunch_out'],
+                'lunch_in' => $actualLogs['lunch_in'],
+                'break_out_2' => $actualLogs['break_out_2'],
+                'break_in_2' => $actualLogs['break_in_2'],
+                'time_out' => $actualLogs['time_out'],
             ];
         }
- 
-        $batchRows = [];
- 
-        foreach ($employees as $employee) {
-            $empId   = (string) $employee->EMPLOYID;
-            $schInfo = $scheduleByEmpDate[$empId][$date] ?? null;
- 
-            $tw                 = $schInfo['tw']          ?? [];
-            $scheduleType       = $schInfo['scheduleType'] ?? 'Normal';
-            $shiftCode          = $schInfo['shiftCode']    ?? 'N/A';
-            $isRestDay          = $schInfo['isRestDay']    ?? false;
-            $shiftType          = $schInfo['shiftType']    ?? 'N/A';
-            $shiftField         = $schInfo['shiftField']   ?? 0;
-            $originallyShifting = $shiftField === 2;
- 
-            $actualLogs       = $actualLogsMap[$empId] ?? [];
-            $isOnLeave        = isset($leavesByEmpDate[$empId][$date]);
-            $effectiveRestDay = $isRestDay || $isHoliday;
- 
-            $obData = $obsByEmpDate[$empId][$date] ?? null;
-            $obInfo = $obData ? [
-                'time_from' => $obData['time_from'],
-                'time_to'   => $obData['time_to'],
-                'form_type' => $obData['form_type'],
-                'type'      => strtolower($obData['form_type'] ?? '') === 'pb'
-                    ? 'Personal Business' : 'Official Business',
-            ] : null;
- 
-            $isShifting = $originallyShifting
-                ? true
-                : $this->effectiveIsShifting($scheduleType, $actualLogs, $tw, $date);
- 
-            $remarks = $this->resolveRemarks(
-                $actualLogs, $effectiveRestDay, $isOnLeave,
-                $tw[0] ?? null, $schInfo !== null,
-                $date, $isHoliday, $obInfo, $tw[7] ?? null
-            );
- 
-            $flattened = $this->buildFlattenedSlots(
-                $actualLogs, $tw, $schInfo === null, $isShifting, $originallyShifting
-            );
- 
-            $batchRows[] = [
-                'DATE'         => $date,
-                'DAY'          => $current->format('D'),
-                'EMPLOYID'     => $empId,
-                'EMPNAME'      => $employee->EMPNAME,
-                'DEPARTMENT'   => $employee->DEPARTMENT ?? '',
-                'STATION'      => $employee->STATION    ?? '',
-                'PRODLINE'     => $employee->PRODLINE   ?? '',
-                'SHIFTCODE'    => $shiftCode,
-                'SHIFT_TYPE'   => $shiftType,
-                'IS_SHIFTING'  => $isShifting,
-                'REMARKS'      => $remarks,
-                'HOLIDAY_NAME' => $holidayName,
-                ...$flattened,
-            ];
-        }
- 
-        unset($actualLogsMap, $twMap, $schMap);
- 
-        yield ['date' => $date, 'rows' => $batchRows];
- 
-        unset($batchRows);
- 
-        $current->addDay();
     }
- 
-    unset($preNormalizedLogs, $scheduleByEmpDate, $leavesByEmpDate, $obsByEmpDate, $holidaySet, $empHasPunchOnDate);
+    
+    return $result;
 }
 
 }

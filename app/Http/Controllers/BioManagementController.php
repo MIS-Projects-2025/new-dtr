@@ -720,7 +720,7 @@ public function exportLogs(Request $request)
         $dateTo   = $request->date_to;
         $type     = $request->type;
 
-        if (\Carbon\Carbon::parse($dateFrom)->diffInDays(\Carbon\Carbon::parse($dateTo)) > 31) {
+        if (Carbon::parse($dateFrom)->diffInDays(Carbon::parse($dateTo)) > 31) {
             return response()->json(['error' => 'Date range cannot exceed 31 days.'], 422);
         }
 

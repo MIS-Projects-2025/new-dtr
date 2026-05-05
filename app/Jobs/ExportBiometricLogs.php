@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Services\EmployeeService;
+use Carbon\Carbon;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -51,204 +52,183 @@ class ExportBiometricLogs implements ShouldQueue
         Log::channel('single')->info("[EXPORT TIMING] [{$elapsed}s] {$label}");
     }
 
-    public function handle(EmployeeService $employeeService): void
-    {
-        $this->jobStart = microtime(true);
-        $this->tick('Job started');
+public function handle(EmployeeService $employeeService): void
+{
+    $this->jobStart = microtime(true);
+    $this->tick('Job started');
+    $this->updateProgress(5, 'Initializing export...');
 
-        $this->updateProgress(5, 'Initializing export...');
-
-        try {
-            $isWithBreaks = $this->type === 'with_breaks';
-
-            if ($isWithBreaks) {
-                $headers = [
-                    'Employee ID', 'Employee Name', 'Department', 'Station', 'Prodline',
-                    'Date', 'Day', 'Shift',
-                    'Time In', 'Break Out 1', 'Break In 1',
-                    'Lunch Out', 'Lunch In',
-                    'Break Out 2', 'Break In 2', 'Time Out',
-                    'Remarks',
-                ];
-                $colWidths = [12, 32, 22, 14, 14, 12, 6, 16, 10, 12, 10, 10, 10, 12, 10, 10, 16];
-            } else {
-                $headers   = ['Employee ID', 'Employee Name', 'Date DTR', 'Time DTR', 'Flag'];
-                $colWidths = [12, 32, 12, 10, 12];
-            }
-
-            $colCount      = count($headers);
-            $lastColLetter = Coordinate::stringFromColumnIndex($colCount);
-            $normalize     = fn($v) => (!$v || $v === '--:--') ? '--' : $v;
-
-            // ── Phase 1: Spreadsheet init ─────────────────────────────────
-            $t = microtime(true);
-            $spreadsheet = new Spreadsheet();
-            $spreadsheet->getCalculationEngine()->disableCalculationCache();
-            $spreadsheet->getCalculationEngine()->flushInstance();
-            $sheet = $spreadsheet->getActiveSheet();
-            $sheet->setTitle('DTR Export');
-            $sheet->fromArray($headers, null, 'A1');
-            $sheet->getStyle("A1:{$lastColLetter}1")->applyFromArray([
-                'font' => ['bold' => true, 'color' => ['argb' => 'FFFFFFFF'], 'name' => 'Arial', 'size' => 9],
-                'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['argb' => 'FF1F2937']],
-                'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER],
-            ]);
-            foreach ($colWidths as $idx => $width) {
-                $sheet->getColumnDimension(Coordinate::stringFromColumnIndex($idx + 1))->setWidth($width);
-            }
-            $sheet->freezePane('A2');
-            $this->tick('Phase 1: Spreadsheet init — ' . round(microtime(true) - $t, 3) . 's');
-
-            $this->updateProgress(10, 'Fetching base data...');
-
-            // ── Phase 2: getExportDataStreamed setup (inside generator) ────
-            // The generator does all DB queries on first next() call.
-            // We time the FIRST yield separately from subsequent yields.
-            $t           = microtime(true);
-            $generator   = $employeeService->getExportDataStreamed([], $this->dateFrom, $this->dateTo);
-            $firstBatch  = true;
-
-            $dateCount    = (int) \Carbon\Carbon::parse($this->dateFrom)
-                ->diffInDays(\Carbon\Carbon::parse($this->dateTo)) + 1;
-            $datesWritten = 0;
-            $rowIdx       = 2;
-            $rowsByColor  = [];
-            $totalRows    = 0;
-
-            foreach ($generator as $dateBatch) {
-                if ($firstBatch) {
-                    $this->tick('Phase 2: First generator yield (all DB queries + first date PHP work) — ' . round(microtime(true) - $t, 3) . 's');
-                    $firstBatch = false;
-                }
-
-                $batchT    = microtime(true);
-                $batchRows = $dateBatch['rows'];
-                $date      = $dateBatch['date'];
-
-                usort($batchRows, fn($a, $b) => strcmp($a['EMPNAME'], $b['EMPNAME']));
-
-                $buffer      = [];
-                $bufferStart = $rowIdx;
-
-                foreach ($batchRows as $row) {
-                    $remarks    = $row['REMARKS'] ?? '';
-                    $isShifting = $row['IS_SHIFTING'] ?? false;
-
-                    if ($isWithBreaks) {
-                        $buffer[] = [
-                            $row['EMPLOYID'],
-                            $row['EMPNAME'],
-                            $row['DEPARTMENT'],
-                            $row['STATION'],
-                            $row['PRODLINE'],
-                            $row['DATE'],
-                            $row['DAY'],
-                            $row['SHIFT_TYPE'],
-                            $normalize($row['Time In (actual)']     ?? null),
-                            $isShifting ? 'N/A' : $normalize($row['Break Out 1 (actual)'] ?? null),
-                            $isShifting ? 'N/A' : $normalize($row['Break In 1 (actual)']  ?? null),
-                            $normalize($row['Lunch Out (actual)']   ?? null),
-                            $normalize($row['Lunch In (actual)']    ?? null),
-                            $normalize($row['Break Out 2 (actual)'] ?? null),
-                            $normalize($row['Break In 2 (actual)']  ?? null),
-                            $normalize($row['Time Out (actual)']    ?? null),
-                            $remarks,
-                        ];
-                        if (isset(self::REMARK_COLORS[$remarks])) {
-                            $rowsByColor[$remarks][] = $rowIdx;
-                        }
-                        $rowIdx++;
-                    } else {
-                        foreach ([
-                            [$row['Time In (actual)']  ?? null, 'check_in'],
-                            [$row['Time Out (actual)'] ?? null, 'check_out'],
-                        ] as [$time, $flag]) {
-                            if (!$time || $time === '--:--' || $time === '--') continue;
-                            $buffer[] = [$row['EMPLOYID'], $row['EMPNAME'], $row['DATE'], $time, $flag];
-                            if (isset(self::REMARK_COLORS[$remarks])) {
-                                $rowsByColor[$remarks][] = $rowIdx;
-                            }
-                            $rowIdx++;
-                        }
-                    }
-                }
-
-                $writeT = microtime(true);
-                if (!empty($buffer)) {
-                    $sheet->fromArray($buffer, null, 'A' . $bufferStart);
-                }
-                $totalRows += count($buffer);
-
-                unset($buffer, $batchRows, $dateBatch);
-
-                $datesWritten++;
-                $pct = 10 + (int)(($datesWritten / max($dateCount, 1)) * 72);
-                $this->updateProgress($pct, "Processing {$date}... ({$datesWritten}/{$dateCount} days)");
-
-                $this->tick(
-                    "Phase 3: Date {$date} — "
-                    . round(microtime(true) - $batchT, 3) . 's total'
-                    . ' | fromArray ' . round(microtime(true) - $writeT, 3) . 's'
-                    . ' | rows: ' . count($buffer ?? [])
-                );
-            }
-
-            $this->tick("Phase 3 complete: {$totalRows} total rows written");
-
-            // ── Phase 4: Row coloring ─────────────────────────────────────
-            $t = microtime(true);
-            $this->updateProgress(85, 'Applying row colors...');
-            $this->applyRowColorsFast($sheet, $rowsByColor, $lastColLetter);
-            unset($rowsByColor);
-            $this->tick('Phase 4: Row coloring — ' . round(microtime(true) - $t, 3) . 's');
-
-            // ── Phase 5: File save ────────────────────────────────────────
-            $t        = microtime(true);
-            $filename = "biometric_dtr_{$this->dateFrom}_to_{$this->dateTo}_{$this->type}.xlsx";
-            $dir      = storage_path('app/exports');
-            if (!is_dir($dir)) mkdir($dir, 0755, true);
-            $path   = $dir . '/' . $filename;
-            $writer = new Xlsx($spreadsheet);
-            $writer->setPreCalculateFormulas(false);
-            $writer->save($path);
-            $spreadsheet->disconnectWorksheets();
-            unset($spreadsheet, $writer);
-            $this->tick('Phase 5: File save — ' . round(microtime(true) - $t, 3) . 's');
-
-            // ── Final timing summary ──────────────────────────────────────
-            $totalTime = round(microtime(true) - $this->jobStart, 3);
-            $summary   = implode("\n", $this->timings);
-            Log::channel('single')->info(
-                "[EXPORT TIMING SUMMARY] Total: {$totalTime}s\n{$summary}"
-            );
-
-            // Also store in cache so you can read it from the frontend temporarily
-            Cache::put("export_timing_{$this->jobId}", [
-                'total_seconds' => $totalTime,
-                'timings'       => $this->timings,
-            ], now()->addMinutes(30));
-
-            Cache::put("export_{$this->jobId}", [
-                'status'   => 'done',
-                'progress' => 100,
-                'message'  => "Export complete! ({$totalTime}s)",
-                'filename' => $filename,
-            ], now()->addMinutes(10));
-
-        } catch (\Throwable $e) {
-            $this->tick('FAILED: ' . $e->getMessage());
-            Log::channel('single')->error('[EXPORT TIMING] FAILED: ' . $e->getMessage());
-
-            Cache::put("export_{$this->jobId}", [
-                'status'   => 'failed',
-                'progress' => 0,
-                'message'  => 'Export failed: ' . $e->getMessage(),
-                'filename' => null,
-            ], now()->addMinutes(5));
-
-            throw $e;
+    try {
+        $isWithBreaks = $this->type === 'with_breaks';
+        
+        // Define column widths and headers
+        if ($isWithBreaks) {
+            $headers = [
+                'Employee ID', 'Employee Name', 'Department', 'Station', 'Prodline',
+                'Date', 'Day', 'Shift',
+                'Time In', 'Break Out 1', 'Break In 1',
+                'Lunch Out', 'Lunch In',
+                'Break Out 2', 'Break In 2', 'Time Out',
+                'Remarks',
+            ];
+            $colWidths = [12, 32, 22, 14, 14, 12, 6, 16, 10, 12, 10, 10, 10, 12, 10, 10, 16];
+        } else {
+            $headers = ['Employee ID', 'Employee Name', 'Date DTR', 'Time DTR', 'Flag'];
+            $colWidths = [12, 32, 12, 10, 12];
         }
+        
+        // Define normalize function
+        $normalize = fn($v) => (!$v || $v === '--:--') ? '--' : $v;
+        
+        $colCount = count($headers);
+        $lastColLetter = Coordinate::stringFromColumnIndex($colCount);
+        
+        // Spreadsheet setup
+        $spreadsheet = new Spreadsheet();
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setTitle('DTR Export');
+        $sheet->fromArray($headers, null, 'A1');
+        
+        // Style headers
+        $sheet->getStyle("A1:{$lastColLetter}1")->applyFromArray([
+            'font' => ['bold' => true, 'color' => ['argb' => 'FFFFFFFF'], 'name' => 'Arial', 'size' => 9],
+            'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['argb' => 'FF1F2937']],
+            'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER],
+        ]);
+        
+        // Set column widths
+        foreach ($colWidths as $idx => $width) {
+            $sheet->getColumnDimension(Coordinate::stringFromColumnIndex($idx + 1))->setWidth($width);
+        }
+        $sheet->freezePane('A2');
+        
+        // Get data ULTRA FAST from database
+        $this->updateProgress(20, 'Fetching data from database...');
+        $t = microtime(true);
+        
+        $data = $employeeService->getExportDataUltraFast($this->dateFrom, $this->dateTo, $this->type);
+        
+        $this->tick('Data fetched: ' . count($data) . ' rows in ' . round(microtime(true) - $t, 3) . 's');
+        
+        // Process and write to spreadsheet
+        $this->updateProgress(50, 'Writing to spreadsheet...');
+        $rowIdx = 2;
+        $buffer = [];
+        $bufferSize = 500;
+        $rowsByColor = [];
+        
+        foreach ($data as $row) {
+            if ($isWithBreaks) {
+                $buffer[] = [
+                    $row->EMPLOYID,
+                    $row->EMPNAME,
+                    $row->DEPARTMENT ?? '',
+                    $row->STATION ?? '',
+                    $row->PRODLINE ?? '',
+                    $row->log_date,
+                    $row->day,  // Use the day from the data
+                    $row->shift_type,  // Shift type (Day/Night/Afternoon)
+                    $normalize($row->time_in ?? null),
+                    $row->is_shifting ? 'N/A' : $normalize($row->break_out_1 ?? null),
+                    $row->is_shifting ? 'N/A' : $normalize($row->break_in_1 ?? null),
+                    $normalize($row->lunch_out ?? null),
+                    $normalize($row->lunch_in ?? null),
+                    $normalize($row->break_out_2 ?? null),
+                    $normalize($row->break_in_2 ?? null),
+                    $normalize($row->time_out ?? null),
+                    $row->remarks,
+                ];
+                
+                // Track colors
+                if (isset(self::REMARK_COLORS[$row->remarks])) {
+                    $rowsByColor[$row->remarks][] = $rowIdx;
+                }
+                $rowIdx++;
+            } else {
+                // For without breaks, create a row for check_in if exists
+                if ($row->time_in) {
+                    $buffer[] = [$row->EMPLOYID, $row->EMPNAME, $row->log_date, $row->time_in, 'check_in'];
+                    if (isset(self::REMARK_COLORS[$row->remarks])) {
+                        $rowsByColor[$row->remarks][] = $rowIdx;
+                    }
+                    $rowIdx++;
+                }
+                // Create a row for check_out if exists
+                if ($row->time_out) {
+                    $buffer[] = [$row->EMPLOYID, $row->EMPNAME, $row->log_date, $row->time_out, 'check_out'];
+                    if (isset(self::REMARK_COLORS[$row->remarks])) {
+                        $rowsByColor[$row->remarks][] = $rowIdx;
+                    }
+                    $rowIdx++;
+                }
+            }
+            
+            // Write in chunks to save memory
+            if (count($buffer) >= $bufferSize) {
+                $sheet->fromArray($buffer, null, 'A' . ($rowIdx - count($buffer)));
+                $buffer = [];
+            }
+        }
+        
+        // Write remaining rows
+        if (!empty($buffer)) {
+            $sheet->fromArray($buffer, null, 'A' . ($rowIdx - count($buffer)));
+        }
+        
+        $this->tick('Writing complete in ' . round(microtime(true) - $t, 3) . 's');
+        
+        // Apply row colors
+        if (!empty($rowsByColor)) {
+            $this->updateProgress(90, 'Applying row colors...');
+            $colorT = microtime(true);
+            $this->applyRowColorsFast($sheet, $rowsByColor, $lastColLetter);
+            $this->tick('Row coloring: ' . round(microtime(true) - $colorT, 3) . 's');
+        }
+        
+        // Save file
+        $this->updateProgress(95, 'Saving file...');
+        $filename = "biometric_dtr_{$this->dateFrom}_to_{$this->dateTo}_{$this->type}.xlsx";
+        $dir = storage_path('app/exports');
+        if (!is_dir($dir)) mkdir($dir, 0755, true);
+        
+        $writer = new Xlsx($spreadsheet);
+        $writer->setPreCalculateFormulas(false);
+        $writer->save($dir . '/' . $filename);
+        $spreadsheet->disconnectWorksheets();
+        unset($spreadsheet, $writer);
+        
+        $this->tick('File saved: ' . $filename);
+        
+        // Update progress and cache
+        $totalTime = round(microtime(true) - $this->jobStart, 3);
+        $this->updateProgress(100, 'Export complete!');
+        
+        Cache::put("export_timing_{$this->jobId}", [
+            'total_seconds' => $totalTime,
+            'timings' => $this->timings,
+        ], now()->addMinutes(30));
+        
+        Cache::put("export_{$this->jobId}", [
+            'status' => 'done',
+            'progress' => 100,
+            'message' => "Export complete! ({$totalTime}s)",
+            'filename' => $filename,
+        ], now()->addMinutes(10));
+        
+    } catch (\Throwable $e) {
+        $this->tick('FAILED: ' . $e->getMessage());
+        Log::channel('single')->error('[EXPORT TIMING] FAILED: ' . $e->getMessage());
+        
+        Cache::put("export_{$this->jobId}", [
+            'status' => 'failed',
+            'progress' => 0,
+            'message' => 'Export failed: ' . $e->getMessage(),
+            'filename' => null,
+        ], now()->addMinutes(5));
+        
+        throw $e;
     }
+}
 
     private function applyRowColorsFast(
         \PhpOffice\PhpSpreadsheet\Worksheet\Worksheet $sheet,
