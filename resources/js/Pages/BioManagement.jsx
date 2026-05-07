@@ -670,12 +670,6 @@ const handleExport = async (type) => {
             return;
         }
 
-        const msPerDay = 86400000;
-        const daysDiff = (new Date(exportDateTo) - new Date(exportDateFrom)) / msPerDay;
-        if (daysDiff > 31) {
-            alert('Date range cannot exceed 31 days.');
-            return;
-        }
 
         setExportLoading(true);
         setExportProgress(0);
@@ -1561,7 +1555,7 @@ const [showAddModal, setShowAddModal] = useState(false);
                                             <ul className="list-disc list-inside space-y-0.5">
                                                 <li>Every employee is listed for <span className="font-medium">every date</span> in the range</li>
                                                 <li>Includes Rest Day, Holiday, On Leave, OB/PB, Absent, Present, Pending</li>
-                                                <li><span className="font-medium">With Breaks</span> — all break/lunch slots; max 31-day range</li>
+                                                <li><span className="font-medium">With Breaks</span> — all break/lunch slots</li>
                                                 <li className="font-mono bg-zinc-200 dark:bg-zinc-700 px-1.5 py-0.5 rounded list-none">
                                                     <span className="font-medium">Format: </span>EmployeeID | Employee Name | Department | Station | Prodline | Date | Day | Shift | Time In | Break Out 1 | Break In 1 | Lunch Out | Lunch In | Break Out 2 | Break In 2 | Time Out | Remarks
                                                 </li>
@@ -1597,8 +1591,8 @@ const [showAddModal, setShowAddModal] = useState(false);
                                             {exportDateFrom && exportDateTo && exportDateTo >= exportDateFrom && (() => {
                                                 const days = Math.round((new Date(exportDateTo) - new Date(exportDateFrom)) / 86400000) + 1;
                                                 return (
-                                                    <p className={`text-[9px] pl-[72px] ${days > 31 ? 'text-red-500 dark:text-red-400' : 'text-zinc-400 dark:text-zinc-500'}`}>
-                                                        {days} day{days !== 1 ? 's' : ''} selected{days > 31 ? ' — max is 31 days' : ''}
+                                                    <p className="text-[9px] pl-[72px] text-zinc-400 dark:text-zinc-500">
+                                                        {days} day{days !== 1 ? 's' : ''} selected
                                                     </p>
                                                 );
                                             })()}
@@ -1648,3 +1642,5 @@ const [showAddModal, setShowAddModal] = useState(false);
         </AuthenticatedLayout>
     );
 }
+
+

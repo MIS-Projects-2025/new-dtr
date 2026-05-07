@@ -1009,38 +1009,10 @@ private function effectiveIsShifting(
     string $date = ''
 ): bool {
     if (!$isShifting) {
-        // SHIFT = 1 (Normal): on past dates, disable Break 1 when both
-        // expected AND actual durations are 10hrs+ (600 mins).
-        // On today, always keep Break 1 enabled.
-        $isToday = empty($date) || $date === now()->toDateString();
-        if ($isToday) return false;
-
-        $expectedDuration = null;
-        if (!empty($tw[0]) && !empty($tw[7])) {
-            $expectedIn       = $this->toAbsMin($tw[0], $isNightShift);
-            $expectedOut      = $this->toAbsMin($tw[7], $isNightShift);
-            $expectedDuration = $expectedOut - $expectedIn;
-            if ($expectedDuration < 0) $expectedDuration += 1440;
-        }
-
-        $checkIn  = null;
-        $checkOut = null;
-        foreach ($logs as $log) {
-            if ($log['type'] === 'check_in'  && $checkIn  === null) $checkIn  = $log['time'];
-            if ($log['type'] === 'check_out')                       $checkOut = $log['time'];
-        }
-
-        $actualDuration = null;
-        if ($checkIn && $checkOut) {
-            $inMins         = $this->toAbsMin($checkIn,  $isNightShift);
-            $outMins        = $this->toAbsMin($checkOut, $isNightShift);
-            $actualDuration = $outMins - $inMins;
-            if ($actualDuration < 0) $actualDuration += 1440;
-        }
-
-        return ($expectedDuration !== null && $expectedDuration >= 600)
-            && ($actualDuration   !== null && $actualDuration   >= 600);
-    }
+    // SHIFT = 1 (Normal): Break 1 slots are always enabled regardless
+    // of schedule duration. A 12-hour Normal shift still has Break 1.
+    return false;
+}
 
     $checkIn  = null;
     $checkOut = null;

@@ -7,12 +7,6 @@ use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
 use Carbon\Carbon;
 use App\Services\EmployeeService;
-use PhpOffice\PhpSpreadsheet\Spreadsheet;
-use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
-use PhpOffice\PhpSpreadsheet\Style\Fill;
-use PhpOffice\PhpSpreadsheet\Style\Alignment;
-use PhpOffice\PhpSpreadsheet\Style\Border;
-use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 
 class BioManagementController extends Controller
 {
@@ -720,9 +714,6 @@ public function exportLogs(Request $request)
         $dateTo   = $request->date_to;
         $type     = $request->type;
 
-        if (Carbon::parse($dateFrom)->diffInDays(Carbon::parse($dateTo)) > 31) {
-            return response()->json(['error' => 'Date range cannot exceed 31 days.'], 422);
-        }
 
         // Generate a unique job ID for polling
         $jobId = (string) \Illuminate\Support\Str::uuid();
@@ -792,31 +783,5 @@ public function exportLogs(Request $request)
     return response()->json($timing);
 }
 
-
-/**
-     * Merge a sorted list of row indices into contiguous range strings.
-     * e.g. [2,3,4,7,8,10] → ["A2:E4", "A7:E8", "A10:E10"]
-     */
-    private function buildContiguousRanges(array $rowIndices, string $lastCol): array
-    {
-        if (empty($rowIndices)) return [];
-
-        sort($rowIndices);
-        $ranges = [];
-        $start  = $rowIndices[0];
-        $prev   = $rowIndices[0];
-
-        for ($i = 1; $i < count($rowIndices); $i++) {
-            if ($rowIndices[$i] === $prev + 1) {
-                $prev = $rowIndices[$i];
-            } else {
-                $ranges[] = "A{$start}:{$lastCol}{$prev}";
-                $start    = $rowIndices[$i];
-                $prev     = $rowIndices[$i];
-            }
-        }
-
-        $ranges[] = "A{$start}:{$lastCol}{$prev}";
-        return $ranges;
-    }
 }
+
