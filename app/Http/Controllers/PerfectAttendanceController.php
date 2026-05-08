@@ -110,8 +110,14 @@ class PerfectAttendanceController extends Controller
         $station    = $request->get('station', '');
         $prodline   = $request->get('prodline', '');
 
-        $cacheKey = "perfect_attendance_v2:{$month}:{$department}:{$station}:{$prodline}";
-        $ttl      = str_starts_with($month, now()->format('Y-m')) ? 300 : 3600;
+        // Bump this version string whenever you deploy logic changes —
+        // it instantly invalidates all previously cached results.
+        $cacheVersion = 'v3';
+        $cacheKey     = "perfect_attendance_{$cacheVersion}:{$month}:{$department}:{$station}:{$prodline}";
+
+        // Current month: 60s so filters feel responsive.
+        // Past months: 1 hour since the data won't change.
+        $ttl = str_starts_with($month, now()->format('Y-m')) ? 60 : 3600;
 
         try {
             $result = Cache::remember($cacheKey, $ttl, function () use ($month, $department, $station, $prodline) {
@@ -127,6 +133,9 @@ class PerfectAttendanceController extends Controller
 
     private function computePerfectAttendanceStats(string $month, string $department, string $station, string $prodline): array
     {
+
+        ini_set('memory_limit', '512M');
+
         try {
             [$year, $mon] = explode('-', $month);
             $startDate    = Carbon::create((int)$year, (int)$mon, 1)->toDateString();
