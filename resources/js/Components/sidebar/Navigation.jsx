@@ -6,7 +6,8 @@ import {
   Users, 
   ScanLine, 
   Fingerprint,
-  Clock 
+  Clock,
+  Award
 } from "lucide-react";
 
 export default function NavLinks({ isSidebarOpen }) {
@@ -42,6 +43,12 @@ export default function NavLinks({ isSidebarOpen }) {
                 isSidebarOpen={isSidebarOpen}
             />
             <SidebarLink
+                href={route("perfect-attendance.index")}
+                icon={<Award size={20} />}
+                label="Perfect Attendance"
+                isSidebarOpen={isSidebarOpen}
+            />
+            <SidebarLink
                 href={route("scan-logs.index")}
                 icon={<Clock size={20} />}
                 label="Scan Log"
@@ -53,6 +60,7 @@ export default function NavLinks({ isSidebarOpen }) {
                 label="Register Fingerprint"
                 isSidebarOpen={isSidebarOpen}
             />
+            
         </nav>
     );
 }

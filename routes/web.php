@@ -16,6 +16,7 @@ require __DIR__ . '/scan.php';
 require __DIR__ . '/dailytimerecord.php';
 require __DIR__ . '/dashboard.php';
 require __DIR__ . '/biomanagement.php';
+require __DIR__ . '/perfectattendance.php';
 
 
 Route::get("/demo", [DemoController::class, 'index'])->name('demo');
