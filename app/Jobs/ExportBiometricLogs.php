@@ -17,7 +17,8 @@ class ExportBiometricLogs implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public int $timeout = 1200;
-    public int $tries   = 1;
+    public int $tries   = 3;
+    public int $backoff = 10;
 
     private const REMARK_COLORS = [
         'Present'            => ['FFC6EFCE', 'FF375623'],
@@ -59,6 +60,7 @@ class ExportBiometricLogs implements ShouldQueue
 
     public function handle(EmployeeService $employeeService, \App\Services\DtrLogService $dtrLogService): void
     {
+        ini_set('memory_limit', '512M');
         $this->jobStart = microtime(true);
         $this->tick('Job started');
         $this->updateProgress(5, 'Initializing export...');

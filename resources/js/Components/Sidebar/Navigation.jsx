@@ -1,5 +1,5 @@
 import { usePage } from "@inertiajs/react";
-import SidebarLink from "@/Components/sidebar/SidebarLink";
+import SidebarLink from "@/Components/Sidebar/SidebarLink";
 import { 
   LayoutDashboard, 
   CalendarDays, 

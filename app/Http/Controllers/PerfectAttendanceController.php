@@ -110,6 +110,7 @@ class PerfectAttendanceController extends Controller
         $station    = $request->get('station', '');
         $prodline   = $request->get('prodline', '');
 
+<<<<<<< HEAD
         // Bump this version string whenever you deploy logic changes —
         // it instantly invalidates all previously cached results.
         $cacheVersion = 'v3';
@@ -118,6 +119,20 @@ class PerfectAttendanceController extends Controller
         // Current month: 60s so filters feel responsive.
         // Past months: 1 hour since the data won't change.
         $ttl = str_starts_with($month, now()->format('Y-m')) ? 60 : 3600;
+=======
+        $cacheKey = "perfect_attendance_v3:{$month}:{$department}:{$station}:{$prodline}";
+        // Add this temporarily:
+    \Log::info('PA Stats request', [
+        'key'        => $cacheKey,
+        'has_cache'  => Cache::has($cacheKey),
+        'department' => $department,
+        'station'    => $station,
+        'prodline'   => $prodline,
+    ]);
+
+
+        $ttl      = str_starts_with($month, now()->format('Y-m')) ? 300 : 3600;
+>>>>>>> c4ff08a (update some error)
 
         try {
             $result = Cache::remember($cacheKey, $ttl, function () use ($month, $department, $station, $prodline) {
@@ -133,8 +148,12 @@ class PerfectAttendanceController extends Controller
 
     private function computePerfectAttendanceStats(string $month, string $department, string $station, string $prodline): array
     {
+<<<<<<< HEAD
 
         ini_set('memory_limit', '512M');
+=======
+            ini_set('memory_limit', '512M');
+>>>>>>> c4ff08a (update some error)
 
         try {
             [$year, $mon] = explode('-', $month);

@@ -736,6 +736,13 @@ public function exportLogs(Request $request)
         $jobId  = $request->get('job_id');
         $state  = \Illuminate\Support\Facades\Cache::get("export_{$jobId}");
 
+        \Log::info('[EXPORT POLL]', [
+        'job_id' => $jobId,
+        'state'  => $state,
+        'driver' => config('cache.default'),
+        'store'  => config('cache.stores.' . config('cache.default')),
+    ]);
+
         if (!$state) {
             return response()->json([
                 'status'   => 'not_found',
