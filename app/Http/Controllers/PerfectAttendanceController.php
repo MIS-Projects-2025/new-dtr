@@ -110,7 +110,6 @@ class PerfectAttendanceController extends Controller
         $station    = $request->get('station', '');
         $prodline   = $request->get('prodline', '');
 
-<<<<<<< HEAD
         // Bump this version string whenever you deploy logic changes —
         // it instantly invalidates all previously cached results.
         $cacheVersion = 'v3';
@@ -119,20 +118,6 @@ class PerfectAttendanceController extends Controller
         // Current month: 60s so filters feel responsive.
         // Past months: 1 hour since the data won't change.
         $ttl = str_starts_with($month, now()->format('Y-m')) ? 60 : 3600;
-=======
-        $cacheKey = "perfect_attendance_v3:{$month}:{$department}:{$station}:{$prodline}";
-        // Add this temporarily:
-    \Log::info('PA Stats request', [
-        'key'        => $cacheKey,
-        'has_cache'  => Cache::has($cacheKey),
-        'department' => $department,
-        'station'    => $station,
-        'prodline'   => $prodline,
-    ]);
-
-
-        $ttl      = str_starts_with($month, now()->format('Y-m')) ? 300 : 3600;
->>>>>>> c4ff08a (update some error)
 
         try {
             $result = Cache::remember($cacheKey, $ttl, function () use ($month, $department, $station, $prodline) {
@@ -148,12 +133,7 @@ class PerfectAttendanceController extends Controller
 
     private function computePerfectAttendanceStats(string $month, string $department, string $station, string $prodline): array
     {
-<<<<<<< HEAD
-
         ini_set('memory_limit', '512M');
-=======
-            ini_set('memory_limit', '512M');
->>>>>>> c4ff08a (update some error)
 
         try {
             [$year, $mon] = explode('-', $month);
@@ -346,8 +326,8 @@ class PerfectAttendanceController extends Controller
                     }
                 });
 
-            // ── 7. Build date list ────────────────────────────────────────
-            $today = now()->toDateString(); // needed for pending check inside loop
+            // ── 7. Build date list ────────────────────────────────────────────
+            $today = now()->toDateString();
             $dates = [];
             for ($ts = strtotime($startDate); $ts <= strtotime($endDate); $ts += 86400) {
                 $dates[] = date('Y-m-d', $ts);
@@ -363,7 +343,6 @@ class PerfectAttendanceController extends Controller
                 $hireDateRaw = $emp->DATEHIRED ?? null;
                 $hireDate    = $hireDateRaw ? substr((string)$hireDateRaw, 0, 10) : null;
 
-                
                 if (!isset($scheduleByEmpDate[$empId])) continue;
 
                 $workingDays   = 0;
@@ -390,6 +369,7 @@ class PerfectAttendanceController extends Controller
                     // we still need to evaluate their logs for missing punches.
                     if (!$hasSched) {
                         if ($isHoliday) {
+                            $isShifting  = $schInfo['is_shifting'] ?? false;
                             $resolvedMap = $this->dtrLogService->resolveLogsFromPreNormalized(
                                 [$empId],
                                 [$empId => $tw],
@@ -429,19 +409,19 @@ class PerfectAttendanceController extends Controller
                                 };
 
                                 $rdMissing = false;
-                                if (!$timeIn)             $rdMissing = true;
-                                if (!$timeOut)            $rdMissing = true;
-                                if ($b1Out && !$b1In)     $rdMissing = true;
-                                if (!$b1Out && $b1In)     $rdMissing = true;
-                                if ($lOut  && !$lIn)      $rdMissing = true;
-                                if (!$lOut  && $lIn)      $rdMissing = true;
-                                if ($b2Out && !$b2In)     $rdMissing = true;
-                                if (!$b2Out && $b2In)     $rdMissing = true;
+                                if (!$timeIn)         $rdMissing = true;
+                                if (!$timeOut)        $rdMissing = true;
+                                if ($b1Out && !$b1In) $rdMissing = true;
+                                if (!$b1Out && $b1In) $rdMissing = true;
+                                if ($lOut  && !$lIn)  $rdMissing = true;
+                                if (!$lOut  && $lIn)  $rdMissing = true;
+                                if ($b2Out && !$b2In) $rdMissing = true;
+                                if (!$b2Out && $b2In) $rdMissing = true;
 
                                 $rdOverBreak = false;
                                 $rdB2Allowed = $isShifting ? 30 : 15;
-                                if (($d1 = $breakDur($b1Out, $b1In)) !== null && $d1 > 15)       $rdOverBreak = true;
-                                if (($dL = $breakDur($lOut,  $lIn))  !== null && $dL > 60)       $rdOverBreak = true;
+                                if (($d1 = $breakDur($b1Out, $b1In)) !== null && $d1 > 15)           $rdOverBreak = true;
+                                if (($dL = $breakDur($lOut,  $lIn))  !== null && $dL > 60)           $rdOverBreak = true;
                                 if (($d2 = $breakDur($b2Out, $b2In)) !== null && $d2 > $rdB2Allowed) $rdOverBreak = true;
 
                                 if ($rdMissing)   $hasMissing = true;
@@ -450,9 +430,9 @@ class PerfectAttendanceController extends Controller
                         }
                         continue;
                     }
-                    $hasSchedule = true;
 
-                    $isShifting = $schInfo['is_shifting'] ?? false;
+                    $hasSchedule = true;
+                    $isShifting  = $schInfo['is_shifting'] ?? false;
 
                     $resolvedMap = $this->dtrLogService->resolveLogsFromPreNormalized(
                         [$empId],
@@ -497,8 +477,7 @@ class PerfectAttendanceController extends Controller
                         return $dur;
                     };
 
-                    // ── Missing punch / slot-due helpers ─────────────────────
-                    // Extract expected slots from time windows
+                    // ── Extract expected slots from time windows ──────────────
                     $expB1Out = !$isShifting ? ($tw[1] ?? null) : null;
                     $expB1In  = !$isShifting ? ($tw[2] ?? null) : null;
                     $expLOut  = $tw[3] ?? null;
@@ -514,13 +493,12 @@ class PerfectAttendanceController extends Controller
                     // Helper: has this expected slot's time already passed?
                     $slotDue = function (?string $expTime) use ($isToday, $nowMins, $expectedIn): bool {
                         if (!$expTime) return false;
-                        if (!$isToday) return true; // past days always due
+                        if (!$isToday) return true;
                         $slotMins = (int)explode(':', $expTime)[0] * 60 + (int)explode(':', $expTime)[1];
-                        // Handle overnight slots (e.g. night shift expected at 02:00)
-                        $inMins = $expectedIn
+                        $inMins   = $expectedIn
                             ? ((int)explode(':', $expectedIn)[0] * 60 + (int)explode(':', $expectedIn)[1])
                             : 0;
-                        if ($inMins > 720 && $slotMins < 720) $slotMins += 1440; // crosses midnight
+                        if ($inMins > 720 && $slotMins < 720) $slotMins += 1440;
                         return $nowMins >= $slotMins;
                     };
 
@@ -531,11 +509,8 @@ class PerfectAttendanceController extends Controller
                         if ($hasAnyPunch) {
                             $rdMissing = false;
 
-                            // Must have both Time In and Time Out
-                            if (!$timeIn)  $rdMissing = true;
-                            if (!$timeOut) $rdMissing = true;
-
-                            // Any started break pair must be closed
+                            if (!$timeIn)         $rdMissing = true;
+                            if (!$timeOut)        $rdMissing = true;
                             if ($b1Out && !$b1In) $rdMissing = true;
                             if (!$b1Out && $b1In) $rdMissing = true;
                             if ($lOut  && !$lIn)  $rdMissing = true;
@@ -543,7 +518,6 @@ class PerfectAttendanceController extends Controller
                             if ($b2Out && !$b2In) $rdMissing = true;
                             if (!$b2Out && $b2In) $rdMissing = true;
 
-                            // Over-break check
                             $rdOverBreak = false;
                             $rdB2Allowed = $isShifting ? 30 : 15;
                             if (!$isShifting && ($d1 = $breakDur($b1Out, $b1In)) !== null && $d1 > 15)  $rdOverBreak = true;
@@ -553,7 +527,7 @@ class PerfectAttendanceController extends Controller
                             if ($rdMissing)   $hasMissing = true;
                             if ($rdOverBreak) $hasMissing = true;
                         }
-                        $workingDays--; // undo the increment above — not a working day
+                        $workingDays--;
                         continue;
                     }
 
@@ -567,24 +541,16 @@ class PerfectAttendanceController extends Controller
 
                     $isMissingPunch = false;
 
-                    // Always validate if the employee punched at all,
-                    // OR if it's a scheduled working day (not rest/holiday).
                     $shouldCheck = $hasAnyPunch || (!$isRestDay && !$isHoliday && $expectedIn);
 
                     if ($shouldCheck) {
-                        // Time In: only flag missing if expected time has passed
-                        if (!$timeIn && $slotDue($expectedIn))   $isMissingPunch = true;
-
-                        // Time Out: only flag missing if expected time has passed
+                        if (!$timeIn  && $slotDue($expectedIn))  $isMissingPunch = true;
                         if (!$timeOut && $slotDue($expectedOut)) $isMissingPunch = true;
 
-                        // Partial break pairs (started but never returned)
                         if ($b1Out && !$b1In) $isMissingPunch = true;
                         if ($lOut  && !$lIn)  $isMissingPunch = true;
                         if ($b2Out && !$b2In) $isMissingPunch = true;
 
-                        // Expected slots not taken at all — only enforce if the
-                        // slot time has already passed (guards against today's future slots)
                         if ($timeIn) {
                             if ($expB1Out && $slotDue($expB1Out) && (!$b1Out || !$b1In)) $isMissingPunch = true;
                             if ($expLOut  && $slotDue($expLOut)  && (!$lOut  || !$lIn))  $isMissingPunch = true;
@@ -601,7 +567,6 @@ class PerfectAttendanceController extends Controller
                     }
 
                     // ── Absent detection ──────────────────────────────────────
-                    // No punch at all on a scheduled working day = absent
                     $isAbsent = !$hasAnyPunch && !$isOnLeave && !$isRestDay && !$isHoliday && $expectedIn !== null;
 
                     // ── On leave detection ────────────────────────────────────
@@ -609,7 +574,6 @@ class PerfectAttendanceController extends Controller
 
                     // ── Pending detection (today, punch not yet expected) ─────
                     $isPending = false;
-                    // Don't flag pending on rest days or holidays
                     if (!$hasAnyPunch && $expectedIn !== null && !$isRestDay && !$isHoliday && $date === $today) {
                         $nowMins = (int)date('H') * 60 + (int)date('i');
                         $expMins = $this->mins($expectedIn);
@@ -655,7 +619,7 @@ class PerfectAttendanceController extends Controller
                         'STATION'     => $emp->STATION ?? '',
                         'PRODLINE'    => $emp->PRODLINE ?? '',
                         'JOB_TITLE'   => $emp->JOB_TITLE ?? '',
-                        'working_days'=> $workingDays,
+                        'working_days' => $workingDays,
                         'present'     => $presentDays,
                         'on_leave'    => $onLeaveDays,
                         'pending'     => $pendingDays,
@@ -666,23 +630,23 @@ class PerfectAttendanceController extends Controller
             }
 
             $perfectCount = count($perfectList);
-            $pct = $scheduled > 0 ? round(($perfectCount / $scheduled) * 100, 1) : 0;
+            $pct          = $scheduled > 0 ? round(($perfectCount / $scheduled) * 100, 1) : 0;
 
             return [
-            'total_employees'        => $scheduled,
-            'perfect_attendance'     => $perfectCount,
-            'perfect_attendance_pct' => $pct,
-            'with_absences'          => $withAbsences,
-            'employees'              => $perfectList,
-            'filter_options'         => $this->getFilterOptions(),
-        ];
+                'total_employees'        => $scheduled,
+                'perfect_attendance'     => $perfectCount,
+                'perfect_attendance_pct' => $pct,
+                'with_absences'          => $withAbsences,
+                'employees'              => $perfectList,
+                'filter_options'         => $this->getFilterOptions(),
+            ];
 
-    } catch (\Throwable $e) {
-        \Log::error('Perfect attendance stats compute error: ' . $e->getMessage()
-            . ' ' . $e->getFile() . ':' . $e->getLine());
-        throw $e;
+        } catch (\Throwable $e) {
+            \Log::error('Perfect attendance stats compute error: ' . $e->getMessage()
+                . ' ' . $e->getFile() . ':' . $e->getLine());
+            throw $e;
+        }
     }
-}
 
     // ── Shared private helpers ────────────────────────────────────────────────
 
