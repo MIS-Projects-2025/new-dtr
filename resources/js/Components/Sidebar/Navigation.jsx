@@ -7,7 +7,8 @@ import {
   ScanLine, 
   Fingerprint,
   Clock,
-  Award
+  Award,
+  BarChart3
 } from "lucide-react";
 
 export default function NavLinks({ isSidebarOpen }) {
@@ -40,6 +41,12 @@ export default function NavLinks({ isSidebarOpen }) {
                 href={route("biometric-status.index")}
                 icon={<Users size={20} />}
                 label="Employee Biometric Management"
+                isSidebarOpen={isSidebarOpen}
+            />
+            <SidebarLink
+                href={route("attendance.summary")}
+                icon={<BarChart3 size={20} />}
+                label="Attendance Summary"
                 isSidebarOpen={isSidebarOpen}
             />
             <SidebarLink

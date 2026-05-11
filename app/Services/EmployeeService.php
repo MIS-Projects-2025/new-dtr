@@ -3414,11 +3414,29 @@ $holidayMap = Holiday::whereBetween('HOLIDAY_DATE', [$dateFrom, $dateTo])
     }
 
     public static function fastRemarksPublic(
-        bool $hasPunch, bool $isEffectiveRest, bool $isOnLeave,
-        ?string $actualTimeIn, ?string $expectedTimeIn,
-        string $date, bool $isHoliday
+        bool    $hasPunch,
+        bool    $isEffectiveRest,
+        bool    $isOnLeave,
+        ?string $actualTimeIn,
+        ?string $expectedTimeIn,
+        string  $date,
+        bool    $isHoliday
     ): string {
-        return self::fastRemarks($hasPunch, $isEffectiveRest, $isOnLeave, $actualTimeIn, $expectedTimeIn, $date, $isHoliday);
+        $today    = date('Y-m-d');
+        $isFuture = $date > $today;
+
+        // Guard future dates before delegating — covers scheduled employees too
+        if ($isFuture && !$hasPunch) {
+            if ($isHoliday)       return 'Holiday';
+            if ($isEffectiveRest) return 'Rest Day';
+            if ($isOnLeave)       return 'On Leave';
+            return 'Pending';
+        }
+
+        return self::fastRemarks(
+            $hasPunch, $isEffectiveRest, $isOnLeave,
+            $actualTimeIn, $expectedTimeIn, $date, $isHoliday
+        );
     }
 
     private static function mins(string $t): int
@@ -3428,48 +3446,63 @@ $holidayMap = Holiday::whereBetween('HOLIDAY_DATE', [$dateFrom, $dateTo])
         return (int) $h * 60 + (int) $m;
     }
  
-    private static function fastRemarks(
-        bool    $hasPunch,
-        bool    $isEffectiveRest,
-        bool    $isOnLeave,
-        ?string $actualTimeIn,
-        ?string $expectedTimeIn,
-        string  $date,
-        bool    $isHoliday
-    ): string {
-        if ($hasPunch) {
-            if ($isEffectiveRest || $isHoliday) return 'Present';
-            if ($isOnLeave && $actualTimeIn)    return 'On Leave (Present)';
- 
-            if ($actualTimeIn && $expectedTimeIn) {
-                $diff = self::mins($actualTimeIn) - self::mins($expectedTimeIn);
-                if (abs($diff) > 720) $diff = $diff > 0 ? $diff - 1440 : $diff + 1440;
-                return $diff > 0 ? 'Late' : 'Present';
-            }
-            return 'Present';
+private static function fastRemarks(
+    bool    $hasPunch,
+    bool    $isEffectiveRest,
+    bool    $isOnLeave,
+    ?string $actualTimeIn,
+    ?string $expectedTimeIn,
+    string  $date,
+    bool    $isHoliday
+): string {
+    $today      = date('Y-m-d');
+    $isFuture   = $date > $today;
+    $isPast     = $date < $today;
+    $isToday    = $date === $today;
+
+    if ($hasPunch) {
+        if ($isEffectiveRest || $isHoliday) return 'Present';
+        if ($isOnLeave && $actualTimeIn)    return 'On Leave (Present)';
+
+        if ($actualTimeIn && $expectedTimeIn) {
+            $diff = self::mins($actualTimeIn) - self::mins($expectedTimeIn);
+            if (abs($diff) > 720) $diff = $diff > 0 ? $diff - 1440 : $diff + 1440;
+            return $diff > 0 ? 'Late' : 'Present';
         }
- 
+        return 'Present';
+    }
+
+    // Future date — show Pending for days that haven't happened yet
+    if ($isFuture) {
         if ($isHoliday)       return 'Holiday';
         if ($isEffectiveRest) return 'Rest Day';
         if ($isOnLeave)       return 'On Leave';
- 
-        if ($expectedTimeIn !== null) {
-            if ($date < date('Y-m-d')) return 'Absent';
- 
-            $nowMins  = (int) date('H') * 60 + (int) date('i');
-            $expMins  = self::mins($expectedTimeIn);
-            $expHour  = (int) explode(':', $expectedTimeIn)[0];
- 
-            if ($expHour >= 18 && (int) date('H') < $expHour) return 'Pending';
-            if ($expMins > 720 && $nowMins < $expMins - 720) $nowMins += 1440;
- 
-            $diff = $nowMins - $expMins;
-            if ($diff < 0)    return 'Pending';
-            if ($diff <= 120) return 'Late';
-            return 'Absent';
-        }
- 
+        return 'Pending';
+    }
+
+    if ($isHoliday)       return 'Holiday';
+    if ($isEffectiveRest) return 'Rest Day';
+    if ($isOnLeave)       return 'On Leave';
+
+    if ($expectedTimeIn !== null) {
+        if ($isPast) return 'Absent';
+
+        // Today logic
+        $nowMins = (int) date('H') * 60 + (int) date('i');
+        $expMins = self::mins($expectedTimeIn);
+        $expHour = (int) explode(':', $expectedTimeIn)[0];
+
+        if ($expHour >= 18 && (int) date('H') < $expHour) return 'Pending';
+        if ($expMins > 720 && $nowMins < $expMins - 720) $nowMins += 1440;
+
+        $diff = $nowMins - $expMins;
+        if ($diff < 0)    return 'Pending';
+        if ($diff <= 120) return 'Late';
         return 'Absent';
     }
+
+    // No expected time — past date with no punch = Absent, future = Pending
+    return $isPast ? 'Absent' : 'Pending';
+}
 
 }
