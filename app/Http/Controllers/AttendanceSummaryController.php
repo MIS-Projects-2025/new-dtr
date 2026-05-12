@@ -103,14 +103,21 @@ class AttendanceSummaryController extends Controller
                 ShiftCode::whereIn('SHIFT_CODE_ID', $allShiftIds)
                     ->get(['SHIFT_CODE_ID', 'SHIFTCODE', 'TIME_WINDOWS'])
                     ->each(function ($sc) use (&$shiftMeta) {
-                        $raw   = $sc->TIME_WINDOWS;
-                        $tw    = is_array($raw) ? $raw : (json_decode($raw, true) ?? []);
-                        $code  = strtoupper($sc->SHIFTCODE ?? '');
-                        $ti    = $tw[0] ?? null;
+                        $raw  = $sc->TIME_WINDOWS;
+                        $tw   = is_array($raw) ? $raw : (json_decode($raw, true) ?? []);
+                        $code = strtoupper($sc->SHIFTCODE ?? '');
+                        $ti   = $tw[0] ?? null;
+                        $h    = $ti ? (int)explode(':', $ti)[0] : -1;
                         $shiftMeta[(int)$sc->SHIFT_CODE_ID] = [
-                            'time_in'  => $ti,
-                            'is_rd'    => str_contains($code, 'RD'),
-                            'is_night' => $ti && (int)explode(':', $ti)[0] >= 18,
+                            'time_in'    => $ti,
+                            'is_rd'      => str_contains($code, 'RD'),
+                            'is_night'   => $h >= 18,
+                            'shift_type' => match(true) {
+                                $h >= 18 || ($h >= 0 && $h < 6) => 'Night Shift',
+                                $h >= 12                         => 'Afternoon Shift',
+                                $h >= 0                          => 'Day Shift',
+                                default                          => null,
+                            },
                         ];
                     });
             }
@@ -131,6 +138,7 @@ class AttendanceSummaryController extends Controller
                     $shiftId  = (int)($schedule[(string)$dayIndex] ?? $schedule[$dayIndex] ?? 0);
                     $meta     = $shiftId ? ($shiftMeta[$shiftId] ?? null) : null;
                     $shiftInfoByEmpDate[$empId][$d] = $meta;
+// No change needed here — shift_type is already inside $meta
 
                     // $nightEmpIds tracking removed — single query now handles all employees
                 }
@@ -212,10 +220,21 @@ foreach ($rows as $row) {
             $result = [];
             foreach ($employees as $employee) {
                 $empId = (string)$employee->EMPLOYID;
-                $row   = [
+                // Determine shift type from the current week's schedule (use today's date or first scheduled day)
+                $shiftTypeForEmp = null;
+                foreach ($dates as $d) {
+                    $m = $shiftInfoByEmpDate[$empId][$d] ?? null;
+                    if ($m && isset($m['shift_type'])) {
+                        $shiftTypeForEmp = $m['shift_type'];
+                        break;
+                    }
+                }
+
+                $row = [
                     'employee_id' => $empId,
                     'emp_name'    => $employee->EMPNAME,
                     'team'        => $teamMap[(int)($employee->TEAM ?? 0)] ?? '—',
+                    'shift_type'  => $shiftTypeForEmp,
                     'station'     => $employee->STATION ?? '—',
                     'attendance'  => [],
                 ];
@@ -251,7 +270,11 @@ foreach ($rows as $row) {
                         );
                     }
 
-                    $row['attendance'][$d] = $remark;
+                    $meta = $shiftInfoByEmpDate[$empId][$d] ?? null;
+                        $row['attendance'][$d] = [
+                            'remark'     => $remark,
+                            'shift_type' => $meta['shift_type'] ?? null,
+                        ];
                 }
 
                 $result[] = $row;
@@ -325,21 +348,23 @@ public function getLayout2Data(Request $request)
             ->unique()->values()->toArray();
 
         $shiftMeta = [];
-        if (!empty($allShiftIds)) {
-            ShiftCode::whereIn('SHIFT_CODE_ID', $allShiftIds)
-                ->get(['SHIFT_CODE_ID', 'SHIFTCODE', 'TIME_WINDOWS'])
-                ->each(function ($sc) use (&$shiftMeta) {
-                    $raw  = $sc->TIME_WINDOWS;
-                    $tw   = is_array($raw) ? $raw : (json_decode($raw, true) ?? []);
-                    $code = strtoupper($sc->SHIFTCODE ?? '');
-                    $ti   = $tw[0] ?? null;
-                    $shiftMeta[(int)$sc->SHIFT_CODE_ID] = [
-                        'time_in'  => $ti,
-                        'is_rd'    => str_contains($code, 'RD'),
-                        'is_night' => $ti && (int)explode(':', $ti)[0] >= 18,
-                    ];
-                });
-        }
+            if (!empty($allShiftIds)) {
+                ShiftCode::whereIn('SHIFT_CODE_ID', $allShiftIds)
+                    ->get(['SHIFT_CODE_ID', 'SHIFTCODE', 'TIME_WINDOWS'])
+                    ->each(function ($sc) use (&$shiftMeta) {
+                        $raw  = $sc->TIME_WINDOWS;
+                        $tw   = is_array($raw) ? $raw : (json_decode($raw, true) ?? []);
+                        $code = strtoupper($sc->SHIFTCODE ?? '');
+                        $ti   = $tw[0] ?? null;
+                        $h    = $ti ? (int)explode(':', $ti)[0] : -1;
+                        $shiftMeta[(int)$sc->SHIFT_CODE_ID] = [
+                            'time_in'  => $ti,
+                            'is_rd'    => str_contains($code, 'RD'),
+                            // Match same logic used in EmployeeService: night = hour >= 18 OR hour < 6 (graveyard)
+                            'is_night' => $h >= 18 || ($h >= 0 && $h < 6),
+                        ];
+                    });
+            }
 
         $shiftInfoByEmp = [];
         foreach ($allSchedules as $sch) {
@@ -429,13 +454,40 @@ public function getLayout2Data(Request $request)
                 }
             });
 
+        // ── 5b. Suspensions ────────────────────────────────────────────────
+        // da_type 3 = 3-day suspension, da_type 4 = 7-day suspension
+        // date_of_suspension is a '+'-delimited string e.g. "02/20/2024 + 02/21/2024"
+        $suspendedEmpIds = [];
+
+        \App\Models\IrList::whereIn('emp_no', $allEmpIds)
+            ->whereIn('da_type', [3, 4])
+            ->whereNotNull('date_of_suspension')
+            ->where('date_of_suspension', '!=', '')
+            ->get(['emp_no', 'da_type', 'date_of_suspension'])
+            ->each(function ($sus) use (&$suspendedEmpIds, $dateStr) {
+                $empId    = (string) $sus->emp_no;
+                $rawDates = explode('+', $sus->date_of_suspension);
+
+                foreach ($rawDates as $rawDate) {
+                    $rawDate = trim($rawDate);
+                    if (empty($rawDate)) continue;
+
+                    // Try MM/DD/YYYY first, then M/D/Y (single-digit month/day)
+                    $parsed = \DateTime::createFromFormat('m/d/Y', $rawDate)
+                           ?: \DateTime::createFromFormat('n/j/Y', $rawDate);
+
+                    if (!$parsed) continue;
+
+                    if ($parsed->format('Y-m-d') === $dateStr) {
+                        $suspendedEmpIds[$empId] = true;
+                        break;
+                    }
+                }
+            });
+
         // ── 6. Holiday ─────────────────────────────────────────────────────
         $isHoliday = Holiday::whereDate('HOLIDAY_DATE', $dateStr)->exists();
 
-        // Remarks that count as "present/scheduled"
-        $excludedRemarks = ['Absent', 'Rest Day', 'On Leave', 'Holiday'];
-
-        // ── 7. Build result ────────────────────────────────────────────────
         $result = [];
         foreach ($areas as $area) {
             $areaEmpIds = ($empsByArea[$area->id] ?? collect())
@@ -443,84 +495,133 @@ public function getLayout2Data(Request $request)
                 ->map(fn($id) => (string)$id)
                 ->toArray();
 
-            $scheduledCount = 0;
-            $restDayOtCount = 0;
-            $vlBlElCount    = 0;
-            $mlPlCount      = 0;
-            $slCount        = 0;
-            $absentCount    = 0;
+            // Separate counters for Day Shift and Night Shift
+            $shifts = [
+                'Day Shift'   => [
+                    'scheduledCount' => 0, 'restDayOtCount' => 0, 'restDayCount' => 0,
+                    'nonRestDayCount' => 0, 'vlBlElCount' => 0, 'mlPlCount' => 0, 'slCount' => 0,
+                    'absentCount' => 0, 'suspendedCount' => 0, 'requiredHc' => 0,
+                ],
+                'Night Shift' => [
+                    'scheduledCount' => 0, 'restDayOtCount' => 0, 'restDayCount' => 0,
+                    'nonRestDayCount' => 0, 'vlBlElCount' => 0, 'mlPlCount' => 0, 'slCount' => 0,
+                    'absentCount' => 0, 'suspendedCount' => 0, 'requiredHc' => 0,
+                ],
+                'N/A' => [
+                    'scheduledCount' => 0, 'restDayOtCount' => 0, 'restDayCount' => 0,
+                    'nonRestDayCount' => 0, 'vlBlElCount' => 0, 'mlPlCount' => 0, 'slCount' => 0,
+                    'absentCount' => 0, 'suspendedCount' => 0, 'requiredHc' => 0,
+                ],
+            ];
 
-            foreach ($areaEmpIds as $empId) {
-                $meta      = $shiftInfoByEmp[$empId] ?? null;
-                $isNight   = $meta['is_night'] ?? false;
-                $hasPunch  = $isNight
+        foreach ($areaEmpIds as $empId) {
+            $meta        = $shiftInfoByEmp[$empId] ?? null;
+            $isNight     = $meta['is_night'] ?? false;
+
+        $isOnLeave   = isset($onLeaveByEmp[$empId]);
+            $isSuspended = isset($suspendedEmpIds[$empId]);
+            $effectiveRestDay = false;
+
+            // Employees with no schedule go to N/A bucket — no shift detection needed
+            if ($meta === null) {
+                $hasPunch = isset($hasPunchOnDate[$empId][$dateStr])
+                        || isset($nightPunchSet[$empId . '|' . $dateStr]);
+
+                if ($hasPunch)      $remark = 'Present';
+                elseif ($isFuture)  $remark = 'Pending';
+                elseif ($isHoliday) $remark = 'Holiday';
+                else                $remark = 'Absent';
+
+                $shiftKey = 'N/A';
+            } else {
+                $isNight  = $meta['is_night'] ?? false;
+                $hasPunch = $isNight
                     ? isset($nightPunchSet[$empId . '|' . $dateStr])
                     : isset($hasPunchOnDate[$empId][$dateStr]);
-                $isOnLeave = isset($onLeaveByEmp[$empId]);
 
-                $effectiveRestDay = false;
+                $effectiveRestDay = ($meta['is_rd'] ?? false) || $isHoliday;
+                $remark = EmployeeService::fastRemarksPublic(
+                    $hasPunch, $effectiveRestDay, $isOnLeave,
+                    null, $meta['time_in'], $dateStr, $isHoliday
+                );
 
-                if ($meta === null) {
-                    if ($hasPunch)      $remark = 'Present';
-                    elseif ($isFuture)  $remark = 'Pending';
-                    elseif ($isHoliday) $remark = 'Holiday';
-                    else                $remark = 'Absent';
-                } else {
-                    $effectiveRestDay = ($meta['is_rd'] ?? false) || $isHoliday;
-                    $remark = EmployeeService::fastRemarksPublic(
-                        $hasPunch, $effectiveRestDay, $isOnLeave,
-                        null, $meta['time_in'], $dateStr, $isHoliday
-                    );
-                }
-
-                if (!in_array($remark, $excludedRemarks)) {
-                    $scheduledCount++;
-                }
-
-                // Rest Day OT
-                if ($effectiveRestDay && $hasPunch) {
-                    $restDayOtCount++;
-                }
-
-                // Leave type counts
-                if (in_array($remark, ['On Leave', 'On Leave (Present)'])) {
-                    $leaveGroup = $leaveTypeByEmp[$empId] ?? null;
-                    if ($leaveGroup === 'vl_bl_el')     $vlBlElCount++;
-                    elseif ($leaveGroup === 'ml_pl')    $mlPlCount++;
-                    elseif ($leaveGroup === 'sl')       $slCount++;
-                    else                                $vlBlElCount++; // uncategorized falls into VL/BL/EL
-                }
-
-                // Absent count
-                if ($remark === 'Absent') {
-                    $absentCount++;
-                }
+                $shiftKey = $isNight ? 'Night Shift' : 'Day Shift';
             }
 
-            $requiredHc  = $area->area_employees_count;
-            $totalAbsent = $vlBlElCount + $mlPlCount + $slCount + $absentCount;
-            $attPct      = $requiredHc > 0 ? round(($scheduledCount / $requiredHc) * 100, 1) : null;
-            $absPct      = $requiredHc > 0 ? round(($totalAbsent   / $requiredHc) * 100, 1) : null;
+            $s = &$shifts[$shiftKey];
 
-            $result[] = [
-                'area'           => $area->name,
-                'category'       => $area->category ?? 'Uncategorized',
-                'required_hc'    => $requiredHc,
-                'scheduled_hc'   => $scheduledCount,
-                'certified_ops'  => 0,
-                'trainees_hc'    => 0,
-                'rest_day_ot'    => $restDayOtCount,
-                'total_hc'       => $scheduledCount,
-                'attendance_pct' => $attPct,
-                'vl_bl_el'       => $vlBlElCount,
-                'ml_pl'          => $mlPlCount,
-                'sl'             => $slCount,
-                'absent'         => $absentCount,
-                'suspended'      => 0,
-                'total_absent'   => $totalAbsent,
-                'absent_pct'     => $absPct,
-            ];
+        $s['requiredHc']++;
+
+        if ($remark === 'Rest Day') {
+            $s['restDayCount']++;
+        } else {
+            // Only count non-rest-day employees toward scheduled/absent tracking
+            $s['nonRestDayCount']++;
+
+            if (!in_array($remark, ['Absent', 'On Leave', 'Holiday', 'Pending'])) {
+                $s['scheduledCount']++;
+            }
         }
+
+        if ($effectiveRestDay && $hasPunch) {
+            $s['restDayOtCount']++;
+        }
+
+        if (in_array($remark, ['On Leave', 'On Leave (Present)'])) {
+            $leaveGroup = $leaveTypeByEmp[$empId] ?? null;
+            if ($leaveGroup === 'vl_bl_el')  $s['vlBlElCount']++;
+            elseif ($leaveGroup === 'ml_pl') $s['mlPlCount']++;
+            elseif ($leaveGroup === 'sl')    $s['slCount']++;
+            else                             $s['vlBlElCount']++;
+        }
+
+        if ($remark === 'Absent' && !$isSuspended) {
+            $s['absentCount']++;
+        }
+
+        if ($isSuspended) {
+            $s['suspendedCount']++;
+        }
+
+        unset($s);
+    }
+
+    // Build one row per shift that has at least one employee
+    $shiftOrder = ['Day Shift', 'Night Shift', 'N/A'];
+    foreach ($shiftOrder as $shiftLabel) {
+        $s = $shifts[$shiftLabel];
+        if ($s['requiredHc'] === 0) continue;
+
+        $requiredHc  = $s['requiredHc'];
+        $scheduled   = $s['scheduledCount'];
+        $totalAbsent = $s['vlBlElCount'] + $s['mlPlCount'] + $s['slCount']
+                     + $s['absentCount'] + $s['suspendedCount'];
+        $nonRestDay  = $s['nonRestDayCount'];
+        $attPct      = $nonRestDay > 0 ? round(($scheduled   / $nonRestDay) * 100, 1) : null;
+        $absPct      = $nonRestDay > 0 ? round(($totalAbsent / $nonRestDay) * 100, 1) : null;
+
+        $result[] = [
+            'area'           => $area->name,
+            'category'       => $area->category ?? 'Uncategorized',
+            'shift_type'     => $shiftLabel,
+            'required_hc'    => $requiredHc,
+            'rest_day_count' => $s['restDayCount'],
+            'scheduled_hc'   => $scheduled,
+            'certified_ops'  => 0,
+            'trainees_hc'    => 0,
+            'rest_day_ot'    => $s['restDayOtCount'],
+            'total_hc'       => $scheduled,
+            'attendance_pct' => $attPct,
+            'vl_bl_el'       => $s['vlBlElCount'],
+            'ml_pl'          => $s['mlPlCount'],
+            'sl'             => $s['slCount'],
+            'absent'         => $s['absentCount'],
+            'suspended'      => $s['suspendedCount'],
+            'total_absent'   => $totalAbsent,
+            'absent_pct'     => $absPct,
+        ];
+    }
+}
 
         return response()->json(['data' => $result, 'date' => $date]);
 
@@ -536,6 +637,7 @@ private function emptyAreaRow(Area $area): array
     return [
         'area'           => $area->name,
         'category'       => $area->category ?? 'Uncategorized',
+        'shift_type'     => null,
         'required_hc'    => $area->area_employees_count,
         'scheduled_hc'   => 0,
         'certified_ops'  => 0,

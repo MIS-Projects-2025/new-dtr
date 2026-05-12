@@ -507,19 +507,19 @@ const handleFilter = (key, value) =>
 
                         {/* Scrollable table */}
                         <div className="overflow-auto flex-1">
-                            <table className="w-full text-xs border-collapse min-w-max">
+                            <table className="w-full text-xs border-collapse min-w-max [&_th]:border-slate-300 dark:[&_th]:border-slate-500 [&_td]:border-slate-300 dark:[&_td]:border-slate-500">
                                 <thead>
                                     <tr className="sticky top-0 z-10 bg-zinc-50 dark:bg-zinc-800">
-                                        <th className="text-left px-3 py-2.5 font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide border-b border-zinc-200 dark:border-zinc-700 whitespace-nowrap w-28">
+                                        <th className="text-left px-3 py-2.5 font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide border border-zinc-200 dark:border-zinc-700 whitespace-nowrap w-28">
                                             Employee ID
                                         </th>
-                                        <th className="text-left px-3 py-2.5 font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide border-b border-zinc-200 dark:border-zinc-700 whitespace-nowrap w-40">
+                                        <th className="text-left px-3 py-2.5 font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide border border-zinc-200 dark:border-zinc-700 whitespace-nowrap w-40">
                                             Emp Name
                                         </th>
-                                        <th className="text-left px-3 py-2.5 font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide border-b border-zinc-200 dark:border-zinc-700 whitespace-nowrap w-24">
+                                        <th className="text-left px-3 py-2.5 font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide border border-zinc-200 dark:border-zinc-700 whitespace-nowrap w-24">
                                             Team
                                         </th>
-                                        <th className="text-left px-3 py-2.5 font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide border-b border-zinc-200 dark:border-zinc-700 whitespace-nowrap w-40">
+                                        <th className="text-left px-3 py-2.5 font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide border border-zinc-200 dark:border-zinc-700 whitespace-nowrap w-40">
                                             Station
                                         </th>
 
@@ -530,7 +530,7 @@ const handleFilter = (key, value) =>
                                             return (
                                                 <th
                                                     key={i}
-                                                    className={`text-center px-2 py-2.5 font-semibold uppercase tracking-wide border-b border-zinc-200 dark:border-zinc-700 whitespace-nowrap w-24 ${
+                                                    className={`text-center px-2 py-2.5 font-semibold uppercase tracking-wide border border-zinc-200 dark:border-zinc-700 whitespace-nowrap w-24 ${
                                                         isWeekend
                                                             ? "text-indigo-500 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/30"
                                                             : "text-zinc-500 dark:text-zinc-400"
@@ -566,16 +566,16 @@ const handleFilter = (key, value) =>
                                                 key={idx}
                                                 className="hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors"
                                             >
-                                                <td className="px-3 py-2 text-zinc-500 dark:text-zinc-400 font-mono text-[11px]">
+                                                <td className="px-3 py-2 text-zinc-500 dark:text-zinc-400 font-mono text-[11px] border border-zinc-200 dark:border-zinc-700">
                                                     {row.employee_id}
                                                 </td>
-                                                <td className="px-3 py-2 text-zinc-700 dark:text-zinc-200 font-medium max-w-[160px] truncate">
+                                                <td className="px-3 py-2 text-zinc-700 dark:text-zinc-200 font-medium max-w-[160px] truncate border border-zinc-200 dark:border-zinc-700">
                                                     {row.emp_name}
                                                 </td>
-                                                <td className="px-3 py-2 text-zinc-600 dark:text-zinc-300 whitespace-nowrap">
+                                                <td className="px-3 py-2 text-zinc-600 dark:text-zinc-300 whitespace-nowrap border border-zinc-200 dark:border-zinc-700">
                                                     {row.team || "—"}
                                                 </td>
-                                                <td className="px-3 py-2 text-zinc-600 dark:text-zinc-300 max-w-[160px] truncate">
+                                                <td className="px-3 py-2 text-zinc-600 dark:text-zinc-300 max-w-[160px] truncate border border-zinc-200 dark:border-zinc-700">
                                                     {row.station || "—"}
                                                 </td>
 
@@ -583,21 +583,27 @@ const handleFilter = (key, value) =>
                                                     const { day, date: ds, dateKey } = formatDayLabel(date);
                                                     const isWeekend = day === "SAT" || day === "FRI";
                                                     const isToday   = date.toDateString() === new Date().toDateString();
-                                                    const remark    = row.attendance?.[dateKey] ?? null;
+                                                    const cell      = row.attendance?.[dateKey] ?? null;
+                                                    const remark    = cell?.remark ?? null;
+                                                    const shiftType = cell?.shift_type ?? null;
                                                     return (
                                                         <td
                                                             key={i}
-                                                            className={`px-2 py-1.5 text-center align-middle
+                                                            className={`px-2 py-1.5 text-center align-middle border border-zinc-200 dark:border-zinc-700
                                                                 ${isWeekend ? "bg-indigo-50/40 dark:bg-indigo-950/10" : ""}
                                                                 ${isToday   ? "bg-emerald-50/60 dark:bg-emerald-950/20" : ""}
                                                             `}
                                                         >
                                                             <RemarkCell value={remark} />
-                                                            {remark && (
-                                                                <span className={`block text-[8px] mt-0.5 leading-tight font-medium truncate max-w-[80px] mx-auto
-                                                                    ${REMARK[remark]?.cls ?? "text-zinc-400"}
-                                                                `}>
-                                                                    {remark}
+                                                            {shiftType && (
+                                                                <span className={`block text-[8px] mt-0.5 leading-tight font-medium truncate max-w-[80px] mx-auto ${
+                                                                    shiftType === "Night Shift"
+                                                                        ? "text-indigo-500 dark:text-indigo-400"
+                                                                        : shiftType === "Day Shift"
+                                                                        ? "text-amber-500 dark:text-amber-400"
+                                                                        : "text-zinc-400"
+                                                                }`}>
+                                                                    {shiftType === "Night Shift" ? "NS" : shiftType === "Day Shift" ? "DS" : shiftType}
                                                                 </span>
                                                             )}
                                                         </td>
@@ -1018,196 +1024,276 @@ const handleFilter = (key, value) =>
     </div>
 )}
 
-        {/* ── Table ── */}
-        <div className="overflow-auto flex-1">
-            <table className="w-full text-left border-collapse min-w-max" style={{ fontSize: "clamp(8px, 0.8vw, 11px)" }}>
-                <thead className="sticky top-0 z-10">
-                    <tr className="bg-zinc-100 dark:bg-zinc-800 border-b border-zinc-200 dark:border-zinc-700">
-                        {[
-                            { label: "HC per Area",      rowSpan: 2, colSpan: 1 },
-                            { label: "Actual Headcount", rowSpan: 1, colSpan: 7 },
-                            { label: "Absences",         rowSpan: 1, colSpan: 7 },
-                        ].map((h, i) => (
-                            <th
-                                key={i}
-                                rowSpan={h.rowSpan}
-                                colSpan={h.colSpan}
-                                className={`px-3 py-2 font-semibold text-zinc-600 dark:text-zinc-300 uppercase tracking-wide whitespace-nowrap text-left border border-zinc-200 dark:border-zinc-700
-                                    ${h.label === "HC per Area"      ? "bg-zinc-200 dark:bg-zinc-700 text-zinc-700 dark:text-zinc-200" : ""}
-                                    ${h.label === "Actual Headcount" ? "bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-400 text-center" : ""}
-                                    ${h.label === "Absences"         ? "bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-400 text-center" : ""}
-                                `}
+{/* ── Table ── */}
+<div className="overflow-auto flex-1">
+    <table className="w-full text-left border-collapse min-w-max [&_th]:border-slate-300 dark:[&_th]:border-slate-500 [&_td]:border-slate-300 dark:[&_td]:border-slate-500" style={{ fontSize: "clamp(8px, 0.8vw, 11px)" }}>
+<thead className="sticky top-0 z-10">
+    <tr className="bg-zinc-100 dark:bg-zinc-800 border-b border-zinc-200 dark:border-zinc-700">
+        {/* Area name spans 2 rows */}
+        <th rowSpan={2} className="px-3 py-2 font-semibold text-zinc-700 dark:text-zinc-200 uppercase tracking-wide whitespace-nowrap text-left border border-zinc-200 dark:border-zinc-700 bg-zinc-200 dark:bg-zinc-700">
+            HC per Area
+        </th>
+        {/* Shift column spans 2 rows */}
+        <th rowSpan={2} className="px-3 py-2 font-semibold text-zinc-600 dark:text-zinc-300 uppercase tracking-wide whitespace-nowrap text-center border border-zinc-200 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-800">
+            Shift
+        </th>
+        {/* Required Headcount — single column, no DS/NS split */}
+        <th rowSpan={2} className="px-3 py-2 font-semibold text-zinc-600 dark:text-zinc-300 uppercase tracking-wide whitespace-nowrap text-center border border-zinc-200 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-800">
+            Required HC
+        </th>
+        {/* Rest Day — standalone column outside Actual Headcount group */}
+        <th rowSpan={2} className="px-3 py-2 font-semibold text-zinc-600 dark:text-zinc-300 uppercase tracking-wide whitespace-nowrap text-center border border-zinc-200 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-800">
+            Rest Day
+        </th>
+        {/* Actual Headcount group — colSpan 6 (Rest Day removed) */}
+        <th colSpan={6} className="px-3 py-2 font-semibold text-blue-700 dark:text-blue-400 uppercase tracking-wide whitespace-nowrap text-center border border-zinc-200 dark:border-zinc-700 bg-blue-50 dark:bg-blue-950/40">
+            Actual Headcount
+        </th>
+        {/* Absences group */}
+        <th colSpan={7} className="px-3 py-2 font-semibold text-red-700 dark:text-red-400 uppercase tracking-wide whitespace-nowrap text-center border border-zinc-200 dark:border-zinc-700 bg-red-50 dark:bg-red-950/40">
+            Absences
+        </th>
+    </tr>
+    <tr className="bg-zinc-50 dark:bg-zinc-800/80 border-b border-zinc-200 dark:border-zinc-700">
+        {/* Actual Headcount sub-headers */}
+        {[
+            "Scheduled HC",
+            "Certified Operators",
+            "Trainees HC",
+            "Rest Day OT",
+            "Total HC",
+            "%",
+        ].map((h) => (
+            <th key={h} className="px-3 py-1.5 font-semibold text-[9px] text-blue-600 dark:text-blue-400 uppercase tracking-wide whitespace-nowrap text-center border border-zinc-200 dark:border-zinc-700 bg-blue-50/60 dark:bg-blue-950/20">
+                {h}
+            </th>
+        ))}
+        {/* Absences sub-headers */}
+        {[
+            "VL / BL / EL",
+            "ML / PL",
+            "SL",
+            "Absent",
+            "Suspended",
+            "Total Absent",
+            "Absent %",
+        ].map((h) => (
+            <th key={h} className="px-3 py-1.5 font-semibold text-[9px] text-red-600 dark:text-red-400 uppercase tracking-wide whitespace-nowrap text-center border border-zinc-200 dark:border-zinc-700 bg-red-50/60 dark:bg-red-950/20">
+                {h}
+            </th>
+        ))}
+    </tr>
+</thead>
+<tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+    {layout2Loading ? (
+        <tr>
+            <td colSpan={18} className="px-3 py-10 text-center text-zinc-400 dark:text-zinc-500 text-[11px] border border-slate-300 dark:border-slate-500">
+                Loading…
+            </td>
+        </tr>
+    ) : layout2Data.length === 0 ? (
+        <tr>
+            <td colSpan={18} className="px-3 py-10 text-center text-zinc-400 dark:text-zinc-500 text-[11px] border border-slate-300 dark:border-slate-500">
+                No records found.
+            </td>
+        </tr>
+    ) : (
+        <>
+            {/* ── Overview row (grand total) ── */}
+            {(() => {
+                const sum = (key) => layout2Data.reduce((acc, r) => acc + (r[key] ?? 0), 0);
+                const totalScheduled = sum("scheduled_hc");
+                const totalPresent   = sum("total_hc");
+                const totalAbsent    = sum("total_absent");
+                const attPct = totalScheduled > 0 ? ((totalPresent / totalScheduled) * 100).toFixed(1) : "—";
+                const absPct = totalScheduled > 0 ? ((totalAbsent  / totalScheduled) * 100).toFixed(1) : "—";
+                // DS = Day Shift rows, NS = Night Shift rows
+                const totalReq = layout2Data.reduce((acc, r) => acc + (r.required_hc ?? 0), 0);
+                const totalRestDay   = sum("rest_day_count");
+                const totalNonRestDay = totalScheduled + totalAbsent - totalRestDay; // scheduled excludes RD already; use req - RD
+                const totalNonRD     = sum("required_hc") - totalRestDay;
+                const attPctFixed    = totalNonRD > 0 ? ((totalPresent / totalNonRD) * 100).toFixed(1) : "—";
+                const absPctFixed    = totalNonRD > 0 ? ((totalAbsent  / totalNonRD) * 100).toFixed(1) : "—";
+                return (
+                    <tr className="bg-zinc-200 dark:bg-zinc-700 font-bold border-b-2 border-zinc-400 dark:border-zinc-500">
+                        <td className="px-3 py-2 text-zinc-800 dark:text-zinc-100 whitespace-nowrap border border-slate-300 dark:border-slate-500 uppercase tracking-wide text-[10px]">Overview</td>
+                        <td className="px-3 py-2 text-center text-[10px] text-zinc-500 dark:text-zinc-400 border border-slate-300 dark:border-slate-500">All</td>
+                        <td className="px-3 py-2 text-center text-[10px] text-zinc-700 dark:text-zinc-200 border border-slate-300 dark:border-slate-500">{totalReq || "—"}</td>
+                        <td className="px-3 py-2 text-center text-[10px] text-zinc-700 dark:text-zinc-200 border border-slate-300 dark:border-slate-500">{totalRestDay || "—"}</td>
+                        <td className="px-3 py-2 text-center text-[10px] text-zinc-700 dark:text-zinc-200 border border-slate-300 dark:border-slate-500">{totalScheduled        || "—"}</td>
+                        <td className="px-3 py-2 text-center text-[10px] text-zinc-700 dark:text-zinc-200 border border-slate-300 dark:border-slate-500">{sum("certified_ops")  || "—"}</td>
+                        <td className="px-3 py-2 text-center text-[10px] text-zinc-700 dark:text-zinc-200 border border-slate-300 dark:border-slate-500">{sum("trainees_hc")    || "—"}</td>
+                        <td className="px-3 py-2 text-center text-[10px] text-zinc-700 dark:text-zinc-200 border border-slate-300 dark:border-slate-500">{sum("rest_day_ot")    || "—"}</td>
+                        <td className="px-3 py-2 text-center text-[10px] text-blue-700 dark:text-blue-300 border border-slate-300 dark:border-slate-500">{totalPresent          || "—"}</td>
+                        <td className="px-3 py-2 text-center text-[10px] text-blue-700 dark:text-blue-300 border border-slate-300 dark:border-slate-500">{attPctFixed !== "—" ? `${attPctFixed}%` : "—"}</td>
+                        <td className="px-3 py-2 text-center text-[10px] text-zinc-700 dark:text-zinc-200 border border-slate-300 dark:border-slate-500">{sum("vl_bl_el")     || "—"}</td>
+                        <td className="px-3 py-2 text-center text-[10px] text-zinc-700 dark:text-zinc-200 border border-slate-300 dark:border-slate-500">{sum("ml_pl")        || "—"}</td>
+                        <td className="px-3 py-2 text-center text-[10px] text-zinc-700 dark:text-zinc-200 border border-slate-300 dark:border-slate-500">{sum("sl")           || "—"}</td>
+                        <td className="px-3 py-2 text-center text-[10px] text-red-600 dark:text-red-400 border border-slate-300 dark:border-slate-500">{sum("absent")         || "—"}</td>
+                        <td className="px-3 py-2 text-center text-[10px] text-zinc-700 dark:text-zinc-200 border border-slate-300 dark:border-slate-500">{sum("suspended")    || "—"}</td>
+                        <td className="px-3 py-2 text-center text-[10px] text-red-600 dark:text-red-400 border border-slate-300 dark:border-slate-500">{totalAbsent           || "—"}</td>
+                        <td className="px-3 py-2 text-center text-[10px] text-red-600 dark:text-red-400 border border-slate-300 dark:border-slate-500">{absPctFixed !== "—" ? `${absPctFixed}%` : "—"}</td>
+                    </tr>
+                );
+            })()}
+
+            {(() => {
+                const orderedCats = [...new Set(layout2Data.map((r) => r.category || "Uncategorized"))]
+                    .sort((a, b) => a.localeCompare(b));
+
+                // Group by category then by area name — each area can have DS + NS rows
+                const groups = layout2Data.reduce((acc, row) => {
+                const cat = row.category || "Uncategorized";
+                if (!acc[cat]) acc[cat] = {};
+                const area = row.area || "—";
+                if (!acc[cat][area]) acc[cat][area] = { ds: null, ns: null, na: null };
+                if (row.shift_type === "Night Shift")   acc[cat][area].ns = row;
+                else if (row.shift_type === "Day Shift") acc[cat][area].ds = row;
+                else                                     acc[cat][area].na = row;
+                return acc;
+            }, {});
+
+                return orderedCats.map((cat) => {
+                    const areaMap   = groups[cat];
+                    const areaNames = Object.keys(areaMap).sort();
+                    // All rows flat for subtotal
+                    const allRows   = layout2Data.filter(r => (r.category || "Uncategorized") === cat);
+                    const catSum    = (key) => allRows.reduce((acc, r) => acc + (r[key] ?? 0), 0);
+                    const catDsReq  = allRows.filter(r => r.shift_type !== "Night Shift").reduce((acc, r) => acc + (r.required_hc ?? 0), 0);
+                    const catNsReq  = allRows.filter(r => r.shift_type === "Night Shift").reduce((acc, r) => acc + (r.required_hc ?? 0), 0);
+                    const catSched  = catSum("scheduled_hc");
+                    const catPres   = catSum("total_hc");
+                    const catAbs    = catSum("total_absent");
+                    const catAttPct = catSched > 0 ? ((catPres / catSched) * 100).toFixed(1) : "—";
+                    const catAbsPct = catSched > 0 ? ((catAbs  / catSched) * 100).toFixed(1) : "—";
+
+                    return (
+                        <Fragment key={cat}>
+                            {/* ── Category header ── */}
+                            <tr className="bg-indigo-50 dark:bg-indigo-950/30 border-t-2 border-indigo-200 dark:border-indigo-800">
+                                <td colSpan={17} className="px-3 py-1.5 text-[10px] font-bold text-indigo-700 dark:text-indigo-300 uppercase tracking-widest border border-slate-300 dark:border-slate-500">
+                                    {cat}
+                                </td>
+                            </tr>
+
+{/* ── Area rows — TWO rows per area (DS + NS), area name rowSpan=2 ── */}
+{areaNames.map((areaName) => {
+    const { ds, ns } = areaMap[areaName];
+    const na = areaMap[areaName].na ?? null;
+    const shiftRows = [
+        { row: ds, label: "DS",  isNight: false, isNA: false },
+        { row: ns, label: "NS",  isNight: true,  isNA: false },
+        { row: na, label: "N/A", isNight: false, isNA: true  },
+    ].filter(s => s.row !== null);
+    const totalShifts = shiftRows.filter(s => s.row !== null).length;
+    // always render both rows for visual consistency; use rowSpan = 2
+    return (
+        <Fragment key={areaName}>
+            {shiftRows.map(({ row, label, isNight, isNA }, idx) => {
+                const isFirst = idx === 0;
+                const reqBg   = isNA    ? "bg-zinc-50/40    dark:bg-zinc-800/20"
+                            : isNight ? "bg-indigo-50/40  dark:bg-indigo-950/10"
+                            :           "bg-amber-50/40   dark:bg-amber-950/10";
+                const reqText = isNA    ? "text-zinc-400    dark:text-zinc-500"
+                            : isNight ? "text-indigo-700  dark:text-indigo-400"
+                            :           "text-amber-700   dark:text-amber-400";
+                const exists  = row !== null;
+                const v       = (key) => exists ? (row[key] || "—") : "—";
+                const p       = (key) => exists && row[key] != null ? `${row[key]}%` : "—";
+
+                return (
+                    <tr
+                        key={label}
+                        className={`transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/40 ${
+                            isFirst
+                                ? ""
+                                : "border-t border-dashed border-zinc-200 dark:border-zinc-700"
+                        }`}
+                    >
+                        {/* Area name cell — only on first row, spans both rows */}
+                        {isFirst && (
+                            <td
+                                rowSpan={shiftRows.length}
+                                className="px-3 py-2 whitespace-nowrap border border-slate-300 dark:border-slate-500 align-middle pl-6"
                             >
-                                {h.label}
-                            </th>
-                        ))}
-                    </tr>
-                    <tr className="bg-zinc-50 dark:bg-zinc-800/80 border-b border-zinc-200 dark:border-zinc-700">
-                        {/* Actual Headcount sub-headers */}
-                        {[
-                            "Required HC",
-                            "Scheduled HC",
-                            "Certified Operators",
-                            "Trainees HC",
-                            "Rest Day OT",
-                            "Total HC",
-                            "%",
-                        ].map((h) => (
-                            <th key={h} className="px-3 py-1.5 font-semibold text-[9px] text-blue-600 dark:text-blue-400 uppercase tracking-wide whitespace-nowrap text-center border border-zinc-200 dark:border-zinc-700 bg-blue-50/60 dark:bg-blue-950/20">
-                                {h}
-                            </th>
-                        ))}
-                        {/* Absences sub-headers */}
-                        {[
-                            "VL / BL / EL",
-                            "ML / PL",
-                            "SL",
-                            "Absent",
-                            "Suspended",
-                            "Total Absent",
-                            "Absent %",
-                        ].map((h) => (
-                            <th key={h} className="px-3 py-1.5 font-semibold text-[9px] text-red-600 dark:text-red-400 uppercase tracking-wide whitespace-nowrap text-center border border-zinc-200 dark:border-zinc-700 bg-red-50/60 dark:bg-red-950/20">
-                                {h}
-                            </th>
-                        ))}
-                    </tr>
-                </thead>
-                <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-                    {layout2Loading ? (
-                        <tr>
-                            <td colSpan={15} className="px-3 py-10 text-center text-zinc-400 dark:text-zinc-500 text-[11px]">
-                                Loading…
+                                <span className="font-medium text-[11px] text-zinc-700 dark:text-zinc-200">
+                                    {areaName}
+                                </span>
                             </td>
-                        </tr>
-                    ) : layout2Data.length === 0 ? (
-                        <tr>
-                            <td colSpan={15} className="px-3 py-10 text-center text-zinc-400 dark:text-zinc-500 text-[11px]">
-                                No records found.
-                            </td>
-                        </tr>
-                        ) : (
-                        <>
-                            {/* ── Overview row (grand total) at the top ── */}
-                            {(() => {
-                                const sum = (key) => layout2Data.reduce((acc, r) => acc + (r[key] ?? 0), 0);
-                                const totalScheduled = sum("scheduled_hc");
-                                const totalPresent   = sum("total_hc");
-                                const totalAbsent    = sum("total_absent");
-                                const attPct = totalScheduled > 0 ? ((totalPresent / totalScheduled) * 100).toFixed(1) : "—";
-                                const absPct = totalScheduled > 0 ? ((totalAbsent  / totalScheduled) * 100).toFixed(1) : "—";
-                                return (
-                                    <tr className="bg-zinc-200 dark:bg-zinc-700 font-bold border-b-2 border-zinc-400 dark:border-zinc-500">
-                                        <td className="px-3 py-2 text-zinc-800 dark:text-zinc-100 whitespace-nowrap border-r border-zinc-300 dark:border-zinc-600 uppercase tracking-wide text-[10px]">Overview</td>
-                                        <td className="px-3 py-2 text-center text-[10px] text-zinc-700 dark:text-zinc-200">{sum("required_hc")  || "—"}</td>
-                                        <td className="px-3 py-2 text-center text-[10px] text-zinc-700 dark:text-zinc-200">{totalScheduled      || "—"}</td>
-                                        <td className="px-3 py-2 text-center text-[10px] text-zinc-700 dark:text-zinc-200">{sum("certified_ops") || "—"}</td>
-                                        <td className="px-3 py-2 text-center text-[10px] text-zinc-700 dark:text-zinc-200">{sum("trainees_hc")  || "—"}</td>
-                                        <td className="px-3 py-2 text-center text-[10px] text-zinc-700 dark:text-zinc-200">{sum("rest_day_ot")  || "—"}</td>
-                                        <td className="px-3 py-2 text-center text-[10px] text-blue-700 dark:text-blue-300">{totalPresent        || "—"}</td>
-                                        <td className="px-3 py-2 text-center text-[10px] text-blue-700 dark:text-blue-300">{attPct !== "—" ? `${attPct}%` : "—"}</td>
-                                        <td className="px-3 py-2 text-center text-[10px] text-zinc-700 dark:text-zinc-200">{sum("vl_bl_el")     || "—"}</td>
-                                        <td className="px-3 py-2 text-center text-[10px] text-zinc-700 dark:text-zinc-200">{sum("ml_pl")        || "—"}</td>
-                                        <td className="px-3 py-2 text-center text-[10px] text-zinc-700 dark:text-zinc-200">{sum("sl")           || "—"}</td>
-                                        <td className="px-3 py-2 text-center text-[10px] text-red-600 dark:text-red-400">{sum("absent")         || "—"}</td>
-                                        <td className="px-3 py-2 text-center text-[10px] text-zinc-700 dark:text-zinc-200">{sum("suspended")    || "—"}</td>
-                                        <td className="px-3 py-2 text-center text-[10px] text-red-600 dark:text-red-400">{totalAbsent           || "—"}</td>
-                                        <td className="px-3 py-2 text-center text-[10px] text-red-600 dark:text-red-400">{absPct !== "—" ? `${absPct}%` : "—"}</td>
-                                    </tr>
-                                );
-                            })()}
+                        )}
 
-                            {(() => {
-                                const orderedCats = [...new Set(layout2Data.map((r) => r.category || "Uncategorized"))]
-                                    .sort((a, b) => a.localeCompare(b));
-                                const groups = layout2Data.reduce((acc, row) => {
-                                    const cat = row.category || "Uncategorized";
-                                    if (!acc[cat]) acc[cat] = [];
-                                    acc[cat].push(row);
-                                    return acc;
-                                }, {});
+                        {/* Shift badge */}
+                        <td className={`px-3 py-1.5 text-center border border-slate-300 dark:border-slate-500 ${reqBg}`}>
+                            <span className={`inline-flex items-center justify-center px-1.5 py-0.5 rounded text-[9px] font-bold ${reqText}`}>
+                                {label}
+                            </span>
+                        </td>
 
-                                // Sort rows within each category by area name
-                                Object.keys(groups).forEach((cat) => {
-                                    groups[cat].sort((a, b) => (a.area || "").localeCompare(b.area || ""));
-                                });
+                        {/* Required HC */}
+                        <td className={`px-3 py-1.5 text-center text-[10px] font-semibold border border-slate-300 dark:border-slate-500 ${reqBg} ${reqText}`}>
+                            {v("required_hc")}
+                        </td>
 
-                                return orderedCats.map((cat) => (
-                                    <Fragment key={cat}>
-                                        {/* ── Category header row ── */}
-                                        <tr className="bg-indigo-50 dark:bg-indigo-950/30 border-t-2 border-indigo-200 dark:border-indigo-800">
-                                            <td
-                                                colSpan={15}
-                                                className="px-3 py-1.5 text-[10px] font-bold text-indigo-700 dark:text-indigo-300 uppercase tracking-widest"
-                                            >
-                                                {cat}
-                                            </td>
-                                        </tr>
+                        {/* Rest Day — standalone, no blue background */}
+                        <td className="px-3 py-1.5 text-center text-zinc-500 dark:text-zinc-400 text-[10px] border border-slate-300 dark:border-slate-500">{v("rest_day_count")}</td>
+                        {/* Actual Headcount */}
+                        <td className="px-3 py-1.5 text-center text-zinc-500 dark:text-zinc-400 bg-blue-50/20 dark:bg-blue-950/10 text-[10px] border border-slate-300 dark:border-slate-500">{v("scheduled_hc")}</td>
+                        <td className="px-3 py-1.5 text-center text-zinc-500 dark:text-zinc-400 bg-blue-50/20 dark:bg-blue-950/10 text-[10px] border border-slate-300 dark:border-slate-500">{v("certified_ops")}</td>
+                        <td className="px-3 py-1.5 text-center text-zinc-500 dark:text-zinc-400 bg-blue-50/20 dark:bg-blue-950/10 text-[10px] border border-slate-300 dark:border-slate-500">{v("trainees_hc")}</td>
+                        <td className="px-3 py-1.5 text-center text-zinc-500 dark:text-zinc-400 bg-blue-50/20 dark:bg-blue-950/10 text-[10px] border border-slate-300 dark:border-slate-500">{v("rest_day_ot")}</td>
+                        <td className="px-3 py-1.5 text-center font-semibold text-blue-700 dark:text-blue-400 bg-blue-50/20 dark:bg-blue-950/10 text-[10px] border border-slate-300 dark:border-slate-500">{v("total_hc")}</td>
+                        <td className="px-3 py-1.5 text-center font-semibold text-blue-700 dark:text-blue-400 bg-blue-50/20 dark:bg-blue-950/10 text-[10px] border border-slate-300 dark:border-slate-500">{p("attendance_pct")}</td>
 
-                                        {/* ── Area rows ── */}
-                                        {groups[cat].map((row, idx) => (
-                                            <tr key={idx} className="hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors">
-                                                <td className="px-3 py-2 font-medium text-zinc-700 dark:text-zinc-200 whitespace-nowrap border-r border-zinc-100 dark:border-zinc-800 pl-6">
-                                                    {row.area || "—"}
-                                                </td>
-                                                <td className="px-3 py-2 text-center text-zinc-500 dark:text-zinc-400 bg-blue-50/20 dark:bg-blue-950/10">{row.required_hc    ?? "—"}</td>
-                                                <td className="px-3 py-2 text-center text-zinc-500 dark:text-zinc-400 bg-blue-50/20 dark:bg-blue-950/10">{row.scheduled_hc   ?? "—"}</td>
-                                                <td className="px-3 py-2 text-center text-zinc-500 dark:text-zinc-400 bg-blue-50/20 dark:bg-blue-950/10">{row.certified_ops  ?? "—"}</td>
-                                                <td className="px-3 py-2 text-center text-zinc-500 dark:text-zinc-400 bg-blue-50/20 dark:bg-blue-950/10">{row.trainees_hc    ?? "—"}</td>
-                                                <td className="px-3 py-2 text-center text-zinc-500 dark:text-zinc-400 bg-blue-50/20 dark:bg-blue-950/10">{row.rest_day_ot    ?? "—"}</td>
-                                                <td className="px-3 py-2 text-center font-semibold text-blue-700 dark:text-blue-400 bg-blue-50/20 dark:bg-blue-950/10">{row.total_hc       ?? "—"}</td>
-                                                <td className="px-3 py-2 text-center font-semibold text-blue-700 dark:text-blue-400 bg-blue-50/20 dark:bg-blue-950/10">
-                                                    {row.attendance_pct != null ? `${row.attendance_pct}%` : "—"}
-                                                </td>
-                                                <td className="px-3 py-2 text-center text-zinc-500 dark:text-zinc-400 bg-red-50/20 dark:bg-red-950/10">{row.vl_bl_el       ?? "—"}</td>
-                                                <td className="px-3 py-2 text-center text-zinc-500 dark:text-zinc-400 bg-red-50/20 dark:bg-red-950/10">{row.ml_pl          ?? "—"}</td>
-                                                <td className="px-3 py-2 text-center text-zinc-500 dark:text-zinc-400 bg-red-50/20 dark:bg-red-950/10">{row.sl             ?? "—"}</td>
-                                                <td className="px-3 py-2 text-center text-red-600 dark:text-red-400 bg-red-50/20 dark:bg-red-950/10">{row.absent          ?? "—"}</td>
-                                                <td className="px-3 py-2 text-center text-zinc-500 dark:text-zinc-400 bg-red-50/20 dark:bg-red-950/10">{row.suspended       ?? "—"}</td>
-                                                <td className="px-3 py-2 text-center font-semibold text-red-600 dark:text-red-400 bg-red-50/20 dark:bg-red-950/10">{row.total_absent   ?? "—"}</td>
-                                                <td className="px-3 py-2 text-center font-semibold text-red-600 dark:text-red-400 bg-red-50/20 dark:bg-red-950/10">
-                                                    {row.absent_pct != null ? `${row.absent_pct}%` : "—"}
-                                                </td>
-                                            </tr>
-                                        ))}
+                        {/* Absences */}
+                        <td className="px-3 py-1.5 text-center text-zinc-500 dark:text-zinc-400 bg-red-50/20 dark:bg-red-950/10 text-[10px] border border-slate-300 dark:border-slate-500">{v("vl_bl_el")}</td>
+                        <td className="px-3 py-1.5 text-center text-zinc-500 dark:text-zinc-400 bg-red-50/20 dark:bg-red-950/10 text-[10px] border border-slate-300 dark:border-slate-500">{v("ml_pl")}</td>
+                        <td className="px-3 py-1.5 text-center text-zinc-500 dark:text-zinc-400 bg-red-50/20 dark:bg-red-950/10 text-[10px] border border-slate-300 dark:border-slate-500">{v("sl")}</td>
+                        <td className="px-3 py-1.5 text-center text-red-600 dark:text-red-400 bg-red-50/20 dark:bg-red-950/10 text-[10px] border border-slate-300 dark:border-slate-500">{v("absent")}</td>
+                        <td className="px-3 py-1.5 text-center text-zinc-500 dark:text-zinc-400 bg-red-50/20 dark:bg-red-950/10 text-[10px] border border-slate-300 dark:border-slate-500">{v("suspended")}</td>
+                        <td className="px-3 py-1.5 text-center font-semibold text-red-600 dark:text-red-400 bg-red-50/20 dark:bg-red-950/10 text-[10px] border border-slate-300 dark:border-slate-500">{v("total_absent")}</td>
+                        <td className="px-3 py-1.5 text-center font-semibold text-red-600 dark:text-red-400 bg-red-50/20 dark:bg-red-950/10 text-[10px] border border-slate-300 dark:border-slate-500">{p("absent_pct")}</td>
+                    </tr>
+                );
+            })}
+        </Fragment>
+    );
+})}
 
-                                        {/* ── Category subtotal row ── */}
-                                        {(() => {
-                                            const catRows = groups[cat];
-                                            const catSum  = (key) => catRows.reduce((acc, r) => acc + (r[key] ?? 0), 0);
-                                            const catScheduled = catSum("scheduled_hc");
-                                            const catPresent   = catSum("total_hc");
-                                            const catAbsent    = catSum("total_absent");
-                                            const catAttPct    = catScheduled > 0 ? ((catPresent / catScheduled) * 100).toFixed(1) : "—";
-                                            const catAbsPct    = catScheduled > 0 ? ((catAbsent  / catScheduled) * 100).toFixed(1) : "—";
-                                            return (
-                                                <tr className="bg-indigo-50/60 dark:bg-indigo-950/20 border-t border-indigo-200 dark:border-indigo-800 font-semibold">
-                                                    <td className="px-3 py-1.5 text-[10px] text-indigo-700 dark:text-indigo-300 whitespace-nowrap border-r border-indigo-200 dark:border-indigo-800 pl-6 italic">
-                                                        Subtotal — {cat}
-                                                    </td>
-                                                    <td className="px-3 py-1.5 text-center text-[10px] text-indigo-600 dark:text-indigo-400">{catSum("required_hc")  || "—"}</td>
-                                                    <td className="px-3 py-1.5 text-center text-[10px] text-indigo-600 dark:text-indigo-400">{catScheduled         || "—"}</td>
-                                                    <td className="px-3 py-1.5 text-center text-[10px] text-indigo-600 dark:text-indigo-400">{catSum("certified_ops") || "—"}</td>
-                                                    <td className="px-3 py-1.5 text-center text-[10px] text-indigo-600 dark:text-indigo-400">{catSum("trainees_hc")  || "—"}</td>
-                                                    <td className="px-3 py-1.5 text-center text-[10px] text-indigo-600 dark:text-indigo-400">{catSum("rest_day_ot")  || "—"}</td>
-                                                    <td className="px-3 py-1.5 text-center text-[10px] text-blue-700 dark:text-blue-400">{catPresent               || "—"}</td>
-                                                    <td className="px-3 py-1.5 text-center text-[10px] text-blue-700 dark:text-blue-400">{catAttPct !== "—" ? `${catAttPct}%` : "—"}</td>
-                                                    <td className="px-3 py-1.5 text-center text-[10px] text-indigo-600 dark:text-indigo-400">{catSum("vl_bl_el")     || "—"}</td>
-                                                    <td className="px-3 py-1.5 text-center text-[10px] text-indigo-600 dark:text-indigo-400">{catSum("ml_pl")        || "—"}</td>
-                                                    <td className="px-3 py-1.5 text-center text-[10px] text-indigo-600 dark:text-indigo-400">{catSum("sl")           || "—"}</td>
-                                                    <td className="px-3 py-1.5 text-center text-[10px] text-red-500 dark:text-red-400">{catSum("absent")            || "—"}</td>
-                                                    <td className="px-3 py-1.5 text-center text-[10px] text-indigo-600 dark:text-indigo-400">{catSum("suspended")    || "—"}</td>
-                                                    <td className="px-3 py-1.5 text-center text-[10px] text-red-500 dark:text-red-400">{catAbsent                   || "—"}</td>
-                                                    <td className="px-3 py-1.5 text-center text-[10px] text-red-500 dark:text-red-400">{catAbsPct !== "—" ? `${catAbsPct}%` : "—"}</td>
-                                                </tr>
-                                            );
-                                        })()}
-                                    </Fragment>
-                                ));
-                            })()}
-                        </>
-                    )}
-                </tbody>
+                            {/* ── Category subtotal ── */}
+                            <tr className="bg-indigo-50/60 dark:bg-indigo-950/20 border-t border-indigo-200 dark:border-indigo-800 font-semibold">
+                                {/* col 1: area name (spans area + shift columns) */}
+                                <td colSpan={2} className="px-3 py-1.5 text-[10px] text-indigo-700 dark:text-indigo-300 whitespace-nowrap border border-slate-300 dark:border-slate-500 pl-6 italic">
+                                    Subtotal — {cat}
+                                </td>
+                                {/* col 3: required HC */}
+                                <td className="px-3 py-1.5 text-center text-[10px] text-indigo-600 dark:text-indigo-400 border border-slate-300 dark:border-slate-500">
+                                    {allRows.reduce((acc, r) => acc + (r.required_hc ?? 0), 0) || "—"}
+                                </td>
+                                {/* col 4: Rest Day — standalone, no blue background */}
+                                <td className="px-3 py-1.5 text-center text-[10px] text-indigo-600 dark:text-indigo-400 border border-slate-300 dark:border-slate-500">{catSum("rest_day_count") || "—"}</td>
+                                {/* cols 5-10: Actual Headcount */}
+                                <td className="px-3 py-1.5 text-center text-[10px] text-indigo-600 dark:text-indigo-400 border border-slate-300 dark:border-slate-500">{catSched || "—"}</td>
+                                <td className="px-3 py-1.5 text-center text-[10px] text-indigo-600 dark:text-indigo-400 border border-slate-300 dark:border-slate-500">{catSum("certified_ops") || "—"}</td>
+                                <td className="px-3 py-1.5 text-center text-[10px] text-indigo-600 dark:text-indigo-400 border border-slate-300 dark:border-slate-500">{catSum("trainees_hc") || "—"}</td>
+                                <td className="px-3 py-1.5 text-center text-[10px] text-indigo-600 dark:text-indigo-400 border border-slate-300 dark:border-slate-500">{catSum("rest_day_ot") || "—"}</td>
+                                <td className="px-3 py-1.5 text-center text-[10px] text-blue-700 dark:text-blue-400 border border-slate-300 dark:border-slate-500">{catPres || "—"}</td>
+                                <td className="px-3 py-1.5 text-center text-[10px] text-blue-700 dark:text-blue-400 border border-slate-300 dark:border-slate-500">{(() => { const catNonRD = allRows.reduce((acc, r) => acc + (r.required_hc ?? 0), 0) - catSum("rest_day_count"); return catNonRD > 0 ? `${((catPres / catNonRD) * 100).toFixed(1)}%` : "—"; })()}</td>
+                                {/* cols 11-17: Absences */}
+                                <td className="px-3 py-1.5 text-center text-[10px] text-indigo-600 dark:text-indigo-400 border border-slate-300 dark:border-slate-500">{catSum("vl_bl_el") || "—"}</td>
+                                <td className="px-3 py-1.5 text-center text-[10px] text-indigo-600 dark:text-indigo-400 border border-slate-300 dark:border-slate-500">{catSum("ml_pl") || "—"}</td>
+                                <td className="px-3 py-1.5 text-center text-[10px] text-indigo-600 dark:text-indigo-400 border border-slate-300 dark:border-slate-500">{catSum("sl") || "—"}</td>
+                                <td className="px-3 py-1.5 text-center text-[10px] text-red-500 dark:text-red-400 border border-slate-300 dark:border-slate-500">{catSum("absent") || "—"}</td>
+                                <td className="px-3 py-1.5 text-center text-[10px] text-indigo-600 dark:text-indigo-400 border border-slate-300 dark:border-slate-500">{catSum("suspended") || "—"}</td>
+                                <td className="px-3 py-1.5 text-center text-[10px] text-red-500 dark:text-red-400 border border-slate-300 dark:border-slate-500">{catAbs || "—"}</td>
+                                <td className="px-3 py-1.5 text-center text-[10px] text-red-500 dark:text-red-400 border border-slate-300 dark:border-slate-500">{(() => { const catNonRD = allRows.reduce((acc, r) => acc + (r.required_hc ?? 0), 0) - catSum("rest_day_count"); return catNonRD > 0 ? `${((catAbs / catNonRD) * 100).toFixed(1)}%` : "—"; })()}</td>
+                            </tr>
+                        </Fragment>
+                    );
+                });
+            })()}
+        </>
+    )}
+</tbody>
             </table>
         </div>
 
