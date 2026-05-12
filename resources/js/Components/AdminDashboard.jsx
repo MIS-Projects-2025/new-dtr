@@ -223,11 +223,12 @@ const UnscheduledEmployeeList = ({ employees = [], loading = false, holiday = nu
 
 const DoughnutChart = ({ stats, loading }) => {
     const data = [
-        { name: 'Present',            value: stats?.present             ?? 0, color: '#22c55e' },
-        { name: 'Absent',             value: stats?.absent              ?? 0, color: '#ef4444' },
-        { name: 'Rest Day',           value: stats?.rest_day            ?? 0, color: '#a1a1aa' },
-        { name: 'Unsched. Present',   value: stats?.unscheduled_present ?? 0, color: '#a855f7' },
-        { name: 'Unsched. Absent',    value: stats?.unscheduled_absent  ?? 0, color: '#f59e0b' },
+        { name: 'Present',                 value: stats?.present                   ?? 0, color: '#22c55e' },
+        { name: 'Absent',                  value: stats?.absent                    ?? 0, color: '#ef4444' },
+        { name: 'Rest Day',                value: stats?.rest_day                  ?? 0, color: '#a1a1aa' },
+        { name: 'Unsched. Present (Day)',  value: stats?.unscheduled_present_day   ?? 0, color: '#a855f7' },
+        { name: 'Unsched. Present (Night)',value: stats?.unscheduled_present_night ?? 0, color: '#6366f1' },
+        { name: 'Unsched. Absent',         value: stats?.unscheduled_absent        ?? 0, color: '#f59e0b' },
     ].filter(d => d.value > 0);
 
     if (loading) {
@@ -370,10 +371,16 @@ const AttendanceAnalytics = ({ analyticsStats = null, analyticsLoading = false, 
             dot: 'bg-zinc-400',
         },
         {
-            label: 'Unscheduled Present',
-            value: analyticsStats?.unscheduled_present ?? 0,
+            label: 'Unsched. Present (Day)',
+            value: analyticsStats?.unscheduled_present_day ?? 0,
             color: 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-400',
             dot: 'bg-purple-500',
+        },
+        {
+            label: 'Unsched. Present (Night)',
+            value: analyticsStats?.unscheduled_present_night ?? 0,
+            color: 'bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-400',
+            dot: 'bg-indigo-500',
         },
         {
             label: 'Unscheduled Absent',

@@ -1495,11 +1495,12 @@ public function getAnalyticsStats(
     string $month   = ''
 ): array {
     $empty = [
-        'present'             => 0,
-        'absent'              => 0,
-        'rest_day'            => 0,
-        'unscheduled_present' => 0,
-        'unscheduled_absent'  => 0,
+        'present'                   => 0,
+        'absent'                    => 0,
+        'rest_day'                  => 0,
+        'unscheduled_present_day'   => 0,
+        'unscheduled_present_night' => 0,
+        'unscheduled_absent'        => 0,
     ];
 
     if ($mode === 'Daily') {
@@ -1512,18 +1513,26 @@ public function getAnalyticsStats(
                  + ($counts['day_unscheduled_rd_present']   ?? 0)
                  + ($counts['night_unscheduled_rd_present'] ?? 0);
 
-        $unscheduledPresent = $unscheduledAbsent = 0;
+        $unscheduledPresentDay = $unscheduledPresentNight = $unscheduledAbsent = 0;
         foreach ($unscheduled as $emp) {
-            if ($emp['REMARKS'] === 'Present')    $unscheduledPresent++;
-            elseif ($emp['REMARKS'] === 'Absent') $unscheduledAbsent++;
+            if ($emp['REMARKS'] === 'Present') {
+                if (($emp['SHIFT_TYPE'] ?? '') === 'Night Shift') {
+                    $unscheduledPresentNight++;
+                } else {
+                    $unscheduledPresentDay++;
+                }
+            } elseif ($emp['REMARKS'] === 'Absent') {
+                $unscheduledAbsent++;
+            }
         }
 
         return [
-            'present'             => $present,
-            'absent'              => ($counts['day_total_absent'] ?? 0) + ($counts['night_total_absent'] ?? 0),
-            'rest_day'            => ($counts['day_rest_day'] ?? 0) + ($counts['night_rest_day'] ?? 0),
-            'unscheduled_present' => $unscheduledPresent,
-            'unscheduled_absent'  => $unscheduledAbsent,
+            'present'                      => $present,
+            'absent'                       => ($counts['day_total_absent'] ?? 0) + ($counts['night_total_absent'] ?? 0),
+            'rest_day'                     => ($counts['day_rest_day'] ?? 0) + ($counts['night_rest_day'] ?? 0),
+            'unscheduled_present_day'      => $unscheduledPresentDay,
+            'unscheduled_present_night'    => $unscheduledPresentNight,
+            'unscheduled_absent'           => $unscheduledAbsent,
         ];
     }
 
@@ -1737,7 +1746,13 @@ public function getAnalyticsStats(
             if ($meta === null) {
                 $hasPunch = isset($hasPunchOnDate[$empId][$d]);
                 if ($hasPunch) {
-                    $summed['unscheduled_present']++;
+                    // Determine shift type from punch time — reuse the night punch set
+                    $isNightPunch = isset($nightPunchSet[$empId . '|' . $d]);
+                    if ($isNightPunch) {
+                        $summed['unscheduled_present_night']++;
+                    } else {
+                        $summed['unscheduled_present_day']++;
+                    }
                 } elseif (!$isHoliday) {
                     $summed['unscheduled_absent']++;
                 }
