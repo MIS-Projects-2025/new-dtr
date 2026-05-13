@@ -56,7 +56,7 @@ export default function NavLinks({ isSidebarOpen }) {
                 isSidebarOpen={isSidebarOpen}
             />
             <SidebarLink
-                href={route("scan-logs")}
+                href={route("scan-logs.index")}
                 icon={<Clock size={20} />}
                 label="Scan Log"
                 isSidebarOpen={isSidebarOpen}

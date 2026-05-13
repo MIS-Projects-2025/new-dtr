@@ -9,7 +9,7 @@ Route::redirect('/', "/$app_name");
 
 Route::prefix($app_name)->middleware(AuthMiddleware::class)->group(function () {
   
-  Route::get('/scan-logs',         [ScanLogController::class, 'index'])->name('scan-logs');
+  Route::get('/scan-logs.index',         [ScanLogController::class, 'index'])->name('scan-logs.index');
   Route::post('/scan-logs/verify', [ScanLogController::class, 'verifyAndLog'])->name('scan-logs.verify');
   Route::get('/scan-logs/recent',  [ScanLogController::class, 'getRecentLogs'])->name('scan-logs.recent');
 
