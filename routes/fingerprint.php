@@ -7,21 +7,14 @@ use App\Http\Controllers\RegisterFingerprintController;
 $app_name = env('APP_NAME', '');
 
 Route::prefix($app_name)
-    ->middleware(['web', AuthMiddleware::class]) // ← 'web' is required for CSRF
+    ->middleware(['web', AuthMiddleware::class])
     ->group(function () {
 
-        Route::get('/register-fingerprint', [RegisterFingerprintController::class, 'index'])
-            ->name('register-fingerprint.index');
+        Route::get('/register-fingerprint',                                         [RegisterFingerprintController::class, 'index'])->name('register-fingerprint');
+        Route::post('/register-fingerprint',                                        [RegisterFingerprintController::class, 'store'])->name('register-fingerprint.store');
+        Route::get('/register-fingerprint/{employId}/registrations',                [RegisterFingerprintController::class, 'getRegistrations'])->name('register-fingerprint.registrations');
+        Route::delete('/register-fingerprint/{employId}/{fingerIndex}',             [RegisterFingerprintController::class, 'destroy'])->name('register-fingerprint.destroy');
 
-        Route::post('/register-fingerprint/capture', [RegisterFingerprintController::class, 'capture'])
-            ->name('register-fingerprint.capture');
+        Route::get('/verify-fingerprint/{employId}/templates', [RegisterFingerprintController::class, 'getTemplatesForVerification'])->name('verify-fingerprint.templates');
 
-        Route::post('/register-fingerprint/store', [RegisterFingerprintController::class, 'store'])
-            ->name('register-fingerprint.store');
-
-        Route::delete('/register-fingerprint/destroy', [RegisterFingerprintController::class, 'destroy'])
-            ->name('register-fingerprint.destroy');
-
-        Route::patch('/register-fingerprint/toggle', [RegisterFingerprintController::class, 'toggleActive'])
-            ->name('register-fingerprint.toggle');
     });

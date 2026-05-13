@@ -3,297 +3,207 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
-use Illuminate\Http\JsonResponse;
 use Inertia\Inertia;
-use App\Services\EmployeeService;
 use App\Models\FingerprintTemplate;
-use App\Models\EmployeeMasterlist;
 use App\Models\AttendanceLog;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Log;
+use App\Models\EmployeeMasterlist;
+use Carbon\Carbon;
 
 class ScanLogController extends Controller
 {
-    private const MATCH_THRESHOLD = 50;
-    private const QUALITY_GATE    = 40;
-    private const HIGH_CONFIDENCE = 150;
-    private const CHUNK_SIZE      = 20;
+    private const MATCH_THRESHOLD = 62; // minimum similarity % to accept as a match
+    private const HASH_SIZE       = 16; // pixel grid for comparison
 
     private const FINGER_LABELS = [
-        0 => 'Right Thumb',  1 => 'Right Index',  2 => 'Right Middle',
-        3 => 'Right Ring',   4 => 'Right Pinky',
-        5 => 'Left Thumb',   6 => 'Left Index',   7 => 'Left Middle',
-        8 => 'Left Ring',    9 => 'Left Pinky',
+        'Right Thumb',  'Right Index',  'Right Middle', 'Right Ring',  'Right Little',
+        'Left Thumb',   'Left Index',   'Left Middle',  'Left Ring',   'Left Little',
     ];
 
-    protected $employeeService;
+    // ── Pages ─────────────────────────────────────────────────────────────────
 
-    public function __construct(EmployeeService $employeeService)
+
+    public function index()
     {
-        $this->employeeService = $employeeService;
-    }
-
-    public function index(Request $request)
-    {
-        $employees     = $this->employeeService->getEmployeesWithScheduleData($request->search, 50);
-        $shiftCodesMap = $this->employeeService->getShiftCodesMap();
-        $todayHoliday  = $this->employeeService->getTodayHoliday();
-
         return Inertia::render('ScanLogs', [
-            'initialEmployees' => $employees,
-            'shiftCodesMap'    => $shiftCodesMap,
-            'todayHoliday'     => $todayHoliday,
+            'app_name' => env('APP_NAME', ''),
         ]);
     }
 
-    // ── match() — receives captured template, runs 1:N server-side ───────────
+    // ── API: verify fingerprint and save log ──────────────────────────────────
 
-    public function match(Request $request): JsonResponse
+    public function verifyAndLog(Request $request)
     {
-        $request->validate([
-            'template' => 'required|string',
-            'quality'  => 'nullable|integer|min:0|max:100',
-        ]);
+        $validated = $request->validate([
+        'template_data' => 'required|string',
+        'fmd_data'      => 'nullable|string',   // raw SDK samples for better matching
+        'log_type'      => 'required|string|in:check_in,check_out,break_out1,break_in1,lunch_out,lunch_in,break_out2,break_in2',
+        'quality'       => 'required|integer|min:0|max:100',
+        'device_type'   => 'required|string|max:100',
+    ]);
 
-        $quality     = (int) ($request->quality ?? 0);
-        $templateB64 = preg_replace('/\s+/', '', $request->template);
-        $probeBytes  = base64_decode($templateB64, true);
-
-        if ($probeBytes === false || strlen($probeBytes) < 32) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Invalid fingerprint template.',
-            ], 422);
-        }
-
-        if ($quality < self::QUALITY_GATE) {
-            return response()->json([
-                'success' => false,
-                'message' => "Fingerprint quality too low ({$quality}/100). Please re-scan.",
-            ], 422);
-        }
-
-        // Load all active templates
+        // ── Load all active templates ─────────────────────────────────────────
         $templates = FingerprintTemplate::where('is_active', 1)
-            ->where('device_type', 'secugen')
-            ->where(fn($q) => $q->whereNull('quality')->orWhere('quality', '>=', 20))
-            ->get();
+            ->get(['id', 'employid', 'template_data', 'finger_index', 'quality']);
 
         if ($templates->isEmpty()) {
             return response()->json([
-                'success' => false,
-                'message' => 'No registered fingerprints found in the database.',
-            ]);
+                'matched' => false,
+                'message' => 'No fingerprints registered in the system.',
+            ], 404);
         }
 
-        // Run 1:N match
-        $probeMinutiae = $this->parseISO19794($probeBytes);
-        $bestScore     = 0;
-        $bestTemplate  = null;
+        // ── Compare against every stored template ─────────────────────────────
+        $bestScore    = 0;
+        $bestTemplate = null;
 
-        foreach ($templates->sortByDesc(fn($t) => $t->quality ?? 0)->values()->chunk(self::CHUNK_SIZE) as $chunk) {
-            foreach ($this->matchTemplatesBatch($probeMinutiae, $chunk) as $id => $score) {
+        foreach ($templates as $template) {
+            try {
+                $score = $this->compareImages($validated['template_data'], $template->template_data);
                 if ($score > $bestScore) {
                     $bestScore    = $score;
-                    $bestTemplate = $chunk->firstWhere('id', $id);
+                    $bestTemplate = $template;
                 }
+            } catch (\Throwable) {
+                continue; // skip corrupted template
             }
-            if ($bestScore >= self::HIGH_CONFIDENCE) break;
         }
 
-        if ($bestScore < self::MATCH_THRESHOLD || !$bestTemplate) {
-            Log::channel('daily')->warning('[SCAN_LOG] ❌ No match', [
-                'best_score' => $bestScore,
-                'quality'    => $quality,
-            ]);
+        // ── No match ──────────────────────────────────────────────────────────
+        // Log top 3 scores to see what it's actually matching against
+        $allScores = $templates->map(fn($t) => [
+            'employid'     => $t->employid,
+            'finger_index' => $t->finger_index,
+            'score'        => round($this->compareImages($validated['template_data'], $t->template_data), 2),
+        ])->sortByDesc('score')->take(3)->values();
 
+        \Log::info('[ScanLog] Top matches:', $allScores->toArray());
+
+        if (!$bestTemplate || $bestScore < self::MATCH_THRESHOLD) {
             return response()->json([
-                'success' => false,
-                'message' => 'No matching fingerprint found.',
+                'matched' => false,
+                'message' => 'Fingerprint not recognised. Please try again.',
+                'score'   => $bestScore,
+                'debug'   => $allScores,  // remove this in production
             ]);
         }
 
-        $emp = EmployeeMasterlist::where('EMPLOYID', $bestTemplate->employid)
-                   ->select('EMPID', 'EMPNAME', 'EMPLOYID', 'DEPARTMENT', 'JOB_TITLE')
-                   ->first();
+        // ── Match found — get employee ────────────────────────────────────────
+        $employee = EmployeeMasterlist::where('EMPLOYID', $bestTemplate->employid)->first();
 
-        Log::channel('daily')->info('[SCAN_LOG] ✅ Match found', [
-            'employee' => $emp?->EMPNAME,
-            'employid' => $bestTemplate->employid,
-            'score'    => $bestScore,
-            'quality'  => $quality,
-            'finger'   => self::FINGER_LABELS[$bestTemplate->finger_index] ?? null,
+        if (!$employee) {
+            return response()->json([
+                'matched' => false,
+                'message' => 'Employee record not found.',
+            ], 404);
+        }
+
+        // ── Prevent duplicate logs within 2 minutes ───────────────────────────
+        $recent = AttendanceLog::where('employid', $bestTemplate->employid)
+            ->where('log_type',  $validated['log_type'])
+            ->where('logged_at', '>=', Carbon::now()->subMinutes(2))
+            ->exists();
+
+        if ($recent) {
+            return response()->json([
+                'matched'  => true,
+                'duplicate'=> true,
+                'message'  => 'Duplicate scan — already logged within 2 minutes.',
+                'employee' => [
+                    'employid'   => $employee->EMPLOYID,
+                    'name'       => $employee->EMPNAME,
+                    'department' => $employee->DEPARTMENT,
+                ],
+            ]);
+        }
+
+        // ── Save attendance log ───────────────────────────────────────────────
+        $log = AttendanceLog::create([
+            'employid'      => $bestTemplate->employid,
+            'employee_name' => $employee->EMPNAME,
+            'department'    => $employee->DEPARTMENT,
+            'log_type'      => $validated['log_type'],
+            'finger_label'  => self::FINGER_LABELS[$bestTemplate->finger_index] ?? null,
+            'finger_index'  => $bestTemplate->finger_index,
+            'match_score'   => (int) $bestScore,
+            'quality'       => $validated['quality'],
+            'matched'       => true,
+            'device_type'   => $validated['device_type'],
+            'recorded_by'   => 'fingerprint_scanner',
+            'logged_at'     => Carbon::now(),
         ]);
 
         return response()->json([
-            'success'      => true,
-            'employid'     => $bestTemplate->employid,
-            'score'        => $bestScore,
-            'finger_label' => self::FINGER_LABELS[$bestTemplate->finger_index] ?? null,
-            'employee'     => $emp ? [
-                'EMPID'      => $emp->EMPID,
-                'EMPNAME'    => $emp->EMPNAME,
-                'EMPLOYID'   => $emp->EMPLOYID,
-                'DEPARTMENT' => $emp->DEPARTMENT,
-                'JOB_TITLE'  => $emp->JOB_TITLE,
-            ] : null,
+            'matched'  => true,
+            'duplicate'=> false,
+            'score'    => (int) $bestScore,
+            'log'      => [
+                'id'         => $log->id,
+                'log_type'   => $log->log_type,
+                'logged_at'  => $log->logged_at->format('H:i:s'),
+            ],
+            'employee' => [
+                'employid'    => $employee->EMPLOYID,
+                'name'        => $employee->EMPNAME,
+                'department'  => $employee->DEPARTMENT,
+                'finger'      => self::FINGER_LABELS[$bestTemplate->finger_index] ?? null,
+            ],
         ]);
     }
 
-    // ── Matching helpers (same as VerifyFingerprintController) ────────────────
+    // ── API: recent logs (last 20) ────────────────────────────────────────────
 
-    private function matchTemplatesBatch(array $probeMinutiae, \Illuminate\Support\Collection $templates): array
+    public function getRecentLogs()
     {
-        $scores = [];
-        foreach ($templates as $tpl) {
-            $raw = is_resource($tpl->template_data)
-                ? stream_get_contents($tpl->template_data)
-                : (string) $tpl->template_data;
-            $scores[$tpl->id] = $this->matchMinutiae($probeMinutiae, $this->parseISO19794($raw));
-        }
-        return $scores;
+        $logs = AttendanceLog::whereDate('logged_at', today())
+            ->orderByDesc('logged_at')
+            ->limit(20)
+            ->get(['id', 'employid', 'employee_name', 'department', 'log_type', 'match_score', 'logged_at']);
+
+        return response()->json($logs);
     }
 
-    private function parseISO19794(string $bytes): array
+    // ── Fingerprint comparison ────────────────────────────────────────────────
+
+    /**
+     * Compare two standard-base64 PNG fingerprint images.
+     * Returns a similarity score 0–100.
+     *
+     * Method: resize both images to a small grid, convert to grayscale,
+     * and count pixels within an acceptable brightness tolerance.
+     * Not a cryptographic match — suitable for single-reader environments.
+     */
+    private function compareImages(string $b64A, string $b64B): float
     {
-        if (strlen($bytes) < 32) return [];
-        $count    = ord($bytes[27]);
-        $minutiae = [];
-        $offset   = 28;
-        for ($i = 0; $i < $count; $i++) {
-            if ($offset + 6 > strlen($bytes)) break;
-            $typeX      = (ord($bytes[$offset]) << 8) | ord($bytes[$offset + 1]);
-            $typeY      = (ord($bytes[$offset + 2]) << 8) | ord($bytes[$offset + 3]);
-            $minutiae[] = [
-                'x'     => $typeX & 0x3FFF,
-                'y'     => $typeY & 0x3FFF,
-                'angle' => ord($bytes[$offset + 4]),
-                'type'  => ($typeX >> 14) & 0x03,
-            ];
-            $offset += 6;
-        }
-        return $minutiae;
-    }
+        $imgA = imagecreatefromstring(base64_decode($b64A));
+        $imgB = imagecreatefromstring(base64_decode($b64B));
 
-    private function matchMinutiae(array $probe, array $stored): int
-    {
-        if (empty($probe) || empty($stored)) return 0;
+        if (!$imgA || !$imgB) return 0.0;
 
-        $spatialTol     = 10;
-        $angularTol     = 12;
-        $bestMatchCount = 0;
-        $probeAnchors   = array_slice($probe,  0, 10);
-        $storedAnchors  = array_slice($stored, 0, 10);
+        $s = self::HASH_SIZE;
 
-        foreach ($probeAnchors as $p) {
-            foreach ($storedAnchors as $s) {
-                $rad = ($p['angle'] - $s['angle']) * (2 * M_PI / 255);
-                $cos = cos($rad); $sin = sin($rad);
-                $tx  = $p['x'] - ($s['x'] * $cos - $s['y'] * $sin);
-                $ty  = $p['y'] - ($s['x'] * $sin + $s['y'] * $cos);
+        // Resize to uniform grid
+        $sA = imagecreatetruecolor($s, $s);
+        $sB = imagecreatetruecolor($s, $s);
+        imagecopyresampled($sA, $imgA, 0, 0, 0, 0, $s, $s, imagesx($imgA), imagesy($imgA));
+        imagecopyresampled($sB, $imgB, 0, 0, 0, 0, $s, $s, imagesx($imgB), imagesy($imgB));
 
-                $matchCount = 0;
-                $usedStored = [];
-                foreach ($probe as $pp) {
-                    foreach ($stored as $si => $ss) {
-                        if (isset($usedStored[$si])) continue;
-                        $dx = abs($pp['x'] - ($ss['x'] * $cos - $ss['y'] * $sin + $tx));
-                        $dy = abs($pp['y'] - ($ss['x'] * $sin + $ss['y'] * $cos + $ty));
-                        $da = abs($pp['angle'] - $ss['angle']);
-                        if ($da > 127) $da = 255 - $da;
-                        if ($dx <= $spatialTol && $dy <= $spatialTol && $da <= $angularTol) {
-                            $matchCount++;
-                            $usedStored[$si] = true;
-                            break;
-                        }
-                    }
-                }
-                if ($matchCount > $bestMatchCount) $bestMatchCount = $matchCount;
+        $total   = $s * $s;
+        $matched = 0;
+
+        for ($y = 0; $y < $s; $y++) {
+            for ($x = 0; $x < $s; $x++) {
+                $cA  = imagecolorat($sA, $x, $y);
+                $cB  = imagecolorat($sB, $x, $y);
+                $gA  = (int)(0.299 * (($cA >> 16) & 0xFF) + 0.587 * (($cA >> 8) & 0xFF) + 0.114 * ($cA & 0xFF));
+                $gB  = (int)(0.299 * (($cB >> 16) & 0xFF) + 0.587 * (($cB >> 8) & 0xFF) + 0.114 * ($cB & 0xFF));
+
+                if (abs($gA - $gB) <= 28) $matched++;
             }
         }
 
-        $denom = min(count($probe), count($stored));
-        return $denom === 0 ? 0 : min(200, (int) round(($bestMatchCount / $denom) * 200));
+        imagedestroy($imgA); imagedestroy($imgB);
+        imagedestroy($sA);   imagedestroy($sB);
+
+        return round(($matched / $total) * 100, 2);
     }
-
-    public function store(Request $request): JsonResponse
-{
-    $request->validate([
-        'employid' => 'required|string',
-        'log_type' => 'required|string|in:time_in,break_out_1,break_in_1,lunch_out,lunch_in,break_out_2,break_in_2,time_out',
-    ]);
-
-    $employid  = $request->employid;
-    $logType   = $request->log_type;
-    $loggedAt  = now();
-
-    $emp = EmployeeMasterlist::where('EMPLOYID', $employid)
-               ->select('EMPID', 'EMPNAME', 'EMPLOYID', 'DEPARTMENT')
-               ->first();
-
-    if (!$emp) {
-        return response()->json(['success' => false, 'message' => 'Employee not found.'], 404);
-    }
-
-$dbLogType = $logType; // DB ENUM already matches frontend values exactly
-
-    try {
-        $saved = AttendanceLog::create([
-            'employid'      => $employid,
-            'employee_name' => $emp->EMPNAME,
-            'department'    => $emp->DEPARTMENT,
-            'log_type'      => $dbLogType,
-            'matched'       => true,
-            'device_type'   => 'secugen',
-            'recorded_by'   => Auth::user()?->name ?? 'system',
-            'logged_at'     => $loggedAt,
-        ]);
-
-    } catch (\Illuminate\Database\QueryException $e) {
-        // Duplicate — find the existing one and return it
-        if ($e->errorInfo[1] === 1062) {
-            $existing = AttendanceLog::where('employid', $employid)
-                ->where('log_type', $dbLogType)
-                ->whereDate('logged_at', $loggedAt->toDateString())
-                ->first();
-
-            // time_out always overwrites
-            if ($dbLogType === 'time_out' && $existing) {
-                $existing->update(['logged_at' => $loggedAt]);
-                return response()->json([
-                    'success'   => true,
-                    'updated'   => true,
-                    'log_type'  => $dbLogType,
-                    'logged_at' => $loggedAt->format('Y-m-d H:i:s'),
-                    'employee'  => ['EMPNAME' => $emp->EMPNAME, 'EMPLOYID' => $emp->EMPLOYID],
-                    'message'   => "Time Out updated to " . $loggedAt->format('h:i A') . " for {$emp->EMPNAME}.",
-                ]);
-            }
-
-            return response()->json([
-                'success'   => false,
-                'duplicate' => true,
-                'log_type'  => $dbLogType,
-                'logged_at' => $existing?->logged_at?->format('Y-m-d H:i:s'),
-                'message'   => "{$emp->EMPNAME} already logged {$logType}" .
-                    ($existing?->logged_at ? " at " . $existing->logged_at->format('h:i A') : "") . ".",
-            ], 409);
-        }
-
-        throw $e;
-    }
-
-    Log::channel('daily')->info('[SCAN_LOG] ✅ Log saved', [
-        'employee' => $emp->EMPNAME,
-        'employid' => $emp->EMPLOYID,
-        'log_type' => $dbLogType,
-    ]);
-
-    return response()->json([
-        'success'   => true,
-        'log_type'  => $dbLogType,
-        'logged_at' => $loggedAt->format('Y-m-d H:i:s'),
-        'employee'  => ['EMPNAME' => $emp->EMPNAME, 'EMPLOYID' => $emp->EMPLOYID],
-    ]);
-}
 }

@@ -13,8 +13,8 @@ class FingerprintTemplate extends Model
     public $timestamps = true;
 
     protected $fillable = [
-        'employid', //use this to connect to other models instead of id since employid is the unique identifier for employees
-        'template_data',
+        'employid',
+        'template_data',   // stored as standard base64 string
         'device_type',
         'finger_index',
         'quality',
@@ -22,11 +22,8 @@ class FingerprintTemplate extends Model
         'is_active',
     ];
 
-    /**
-     * IMPORTANT: template_data is a raw binary BLOB.
-     * Hiding it prevents "Malformed UTF-8 characters" errors when Laravel
-     * tries to json_encode() the model anywhere in the app.
-     */
+    // Still hide from general serialization to avoid huge JSON payloads
+    // but we expose it explicitly when needed for verification
     protected $hidden = [
         'template_data',
     ];
@@ -44,9 +41,15 @@ class FingerprintTemplate extends Model
         return $query->where('is_active', 1);
     }
 
-    public function scopeInactive($query)
+    // ── Verification helper ───────────────────────────────────────────────────
+
+    /**
+     * Returns the template as a standard base64 string,
+     * ready to be sent to the browser as data:image/png;base64,...
+     */
+    public function getTemplateBase64(): string
     {
-        return $query->where('is_active', 0);
+        return $this->template_data;
     }
 
     // ── Relationships ─────────────────────────────────────────────────────────

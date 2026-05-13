@@ -2,151 +2,143 @@
 
 namespace App\Http\Controllers;
 
-use Inertia\Inertia;
 use Illuminate\Http\Request;
-use Illuminate\Http\JsonResponse;
-use App\Services\EmployeeService;
-use App\Models\FingerprintTemplate;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Inertia\Inertia;
+use App\Models\EmployeeMasterlist;
+use App\Models\FingerprintTemplate;
 
 class RegisterFingerprintController extends Controller
 {
-    public function __construct(
-        protected EmployeeService $employeeService,
-    ) {}
-
-    public function index(Request $request): \Inertia\Response
+    /**
+     * Display the fingerprint registration page with all active employees
+     * and their existing fingerprint registrations.
+     */
+    public function index(Request $request)
     {
-        $employees   = $this->employeeService->getEmployees();
-        $employeeIds = $employees->pluck('employee_id')->map(fn($id) => (string)$id)->toArray();
+        $employees = EmployeeMasterlist::where('ACCSTATUS', 1)
+            ->orderBy('EMPNAME')
+            ->get([
+                'EMPLOYID',
+                'EMPNAME',
+                'DEPARTMENT',
+                'JOB_TITLE',
+                'STATION',
+                'PRODLINE',
+            ]);
 
-        $templates = FingerprintTemplate::whereIn('employid', $employeeIds)
-            ->select('employid', 'finger_index', 'quality', 'is_active', 'created_at')
-            ->orderBy('finger_index')
-            ->get()
-            ->groupBy(fn($t) => (string)$t->employid)
-            ->map(fn($rows) => $rows->map(fn($t) => [
-                'finger_index'  => $t->finger_index,
-                'quality'       => $t->quality,
-                'is_active'     => $t->is_active,
-                'registered_at' => $t->created_at?->format('Y-m-d H:i'),
-            ])->values()->toArray())
-            ->toArray();
-
-        $employees = $employees->map(function ($emp) use ($templates) {
-            $empId = (string) $emp['employee_id'];
-            $emp['fingerprints'] = $templates[$empId] ?? [];
-            return $emp;
-        });
+        // finger_index → which fingers are already registered per employee
+        $registrations = FingerprintTemplate::where('is_active', 1)
+            ->get(['employid', 'finger_index', 'quality', 'device_type'])
+            ->groupBy('employid')
+            ->map(fn ($group) => $group->map(fn ($r) => [
+                'finger_index' => $r->finger_index,
+                'quality'      => $r->quality,
+                'device_type'  => $r->device_type,
+            ])->values()->toArray());
 
         return Inertia::render('RegisterFingerprint', [
-            'tableData' => ['employees' => $employees],
+            'employees'     => $employees,
+            'registrations' => $registrations,
+            'app_name'      => env('APP_NAME', ''),
         ]);
     }
 
-    public function capture(Request $request): JsonResponse
+    /**
+     * Store a new fingerprint template.
+     * template_data arrives as a base64-encoded string and is stored as binary.
+     */
+    public function store(Request $request)
     {
-        return response()->json([
-            'success' => false,
-            'message' => 'Server-side capture is no longer supported. '
-                       . 'Capture is handled by the browser directly.',
-        ], 410);
-    }
-
-    public function store(Request $request): JsonResponse
-    {
-        $request->validate([
-            'employid'     => 'required|string',
-            'template'     => 'required|string',
-            'quality'      => 'required|integer|min:0|max:100',
-            'finger_index' => 'required|integer|min:0|max:9',
+        $validated = $request->validate([
+            'employid'      => 'required|string|max:50',
+            'template_data' => 'required|string',   // base64
+            'device_type'   => 'required|string|max:100',
+            'finger_index'  => 'required|integer|min:0|max:9',
+            'quality'       => 'required|integer|min:0|max:100',
         ]);
 
-        $templateBase64 = preg_replace('/\s+/', '', $request->template);
-        $rawBinary      = base64_decode($templateBase64, true);
-
-        if ($rawBinary === false || strlen($rawBinary) < 32) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Invalid fingerprint template — decode failed.',
-            ], 422);
-        }
+        DB::beginTransaction();
 
         try {
-            FingerprintTemplate::where('employid',     $request->employid)
-                               ->where('finger_index', $request->finger_index)
-                               ->delete();
+            // Soft-delete the previous template for this employee + finger
+            FingerprintTemplate::where('employid', $validated['employid'])
+                ->where('finger_index', $validated['finger_index'])
+                ->update(['is_active' => 0]);
 
-            $pdo  = DB::connection('dtr')->getPdo();
-            $stmt = $pdo->prepare("
-                INSERT INTO fingerprint_templates
-                    (employid, template_data, device_type, finger_index, quality, registered_by, is_active, created_at, updated_at)
-                VALUES
-                    (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
-            ");
+            $template = FingerprintTemplate::create([
+                'employid'      => $validated['employid'],
+                'template_data' => $validated['template_data'],
+                'device_type'   => $validated['device_type'],
+                'finger_index'  => $validated['finger_index'],
+                'quality'       => $validated['quality'],
+                'registered_by' => Auth::user()?->name ?? 'system',
+                'is_active'     => 1,
+            ]);
 
-            $stmt->bindValue(1, $request->employid);
-            $stmt->bindValue(2, $rawBinary,                    \PDO::PARAM_LOB);
-            $stmt->bindValue(3, 'secugen');
-            $stmt->bindValue(4, (int) $request->finger_index, \PDO::PARAM_INT);
-            $stmt->bindValue(5, (int) $request->quality,      \PDO::PARAM_INT);
-            $stmt->bindValue(6, Auth::user()->name ?? 'system');
-            $stmt->bindValue(7, 1,                             \PDO::PARAM_INT);
-            $stmt->execute();
+            DB::commit();
+
+            return response()->json([
+                'success'     => true,
+                'message'     => 'Fingerprint registered successfully.',
+                'id'          => $template->id,
+                'finger_index'=> $template->finger_index,
+                'quality'     => $template->quality,
+            ]);
 
         } catch (\Throwable $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to save fingerprint: ' . $e->getMessage(),
-            ], 500);
+            DB::rollBack();
+            \Log::error('Fingerprint store error: ' . $e->getMessage());
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
         }
-
-        $activeCount = FingerprintTemplate::where('employid', $request->employid)
-            ->where('is_active', 1)
-            ->count();
-
-        $fingerLabel = collect([
-            0 => 'Right Thumb',  1 => 'Right Index',  2 => 'Right Middle',
-            3 => 'Right Ring',   4 => 'Right Little',
-            5 => 'Left Thumb',   6 => 'Left Index',   7 => 'Left Middle',
-            8 => 'Left Ring',    9 => 'Left Little',
-        ])->get($request->finger_index, "Finger {$request->finger_index}");
-
-        return response()->json([
-            'success'           => true,
-            'message'           => "{$fingerLabel} registered successfully.",
-            'biometric_status'  => $activeCount > 0 ? 'REGISTERED' : 'NOT REGISTERED',
-            'fingerprint_count' => $activeCount,
-        ]);
     }
 
-    public function destroy(Request $request): JsonResponse
+    /**
+     * Return all active fingerprint registrations for one employee.
+     */
+    public function getRegistrations(string $employId)
     {
-        $request->validate([
-            'employid'     => 'required|string',
-            'finger_index' => 'required|integer',
-        ]);
+        $registrations = FingerprintTemplate::where('employid', $employId)
+            ->where('is_active', 1)
+            ->get(['id', 'finger_index', 'quality', 'device_type', 'created_at'])
+            ->map(fn ($r) => [
+                'id'           => $r->id,
+                'finger_index' => $r->finger_index,
+                'quality'      => $r->quality,
+                'device_type'  => $r->device_type,
+                'created_at'   => $r->created_at?->format('M d, Y h:i A'),
+            ])
+            ->keyBy('finger_index');
 
-        FingerprintTemplate::where('employid',     $request->employid)
-                           ->where('finger_index', $request->finger_index)
-                           ->delete();
+        return response()->json($registrations);
+    }
+
+    /**
+     * Soft-delete (deactivate) a specific fingerprint registration.
+     */
+    public function destroy(string $employId, int $fingerIndex)
+    {
+        FingerprintTemplate::where('employid', $employId)
+            ->where('finger_index', $fingerIndex)
+            ->update(['is_active' => 0]);
 
         return response()->json(['success' => true, 'message' => 'Fingerprint removed.']);
     }
 
-    public function toggleActive(Request $request): JsonResponse
-    {
-        $request->validate([
-            'employid'     => 'required|string',
-            'finger_index' => 'required|integer',
-            'is_active'    => 'required|boolean',
-        ]);
+    public function getTemplatesForVerification(string $employId): \Illuminate\Http\JsonResponse
+        {
+            $templates = FingerprintTemplate::where('employid', $employId)
+                ->where('is_active', 1)
+                ->get(['id', 'finger_index', 'quality', 'device_type', 'template_data'])
+                ->map(fn ($t) => [
+                    'id'           => $t->id,
+                    'finger_index' => $t->finger_index,
+                    'quality'      => $t->quality,
+                    'device_type'  => $t->device_type,
+                    'template'     => $t->getTemplateBase64(), // base64 PNG
+                ]);
 
-        FingerprintTemplate::where('employid',     $request->employid)
-                           ->where('finger_index', $request->finger_index)
-                           ->update(['is_active' => $request->is_active]);
-
-        return response()->json(['success' => true]);
-    }
+            return response()->json($templates);
+        }
 }

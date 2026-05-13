@@ -12,7 +12,11 @@
         <link rel="preconnect" href="https://fonts.bunny.net">
         <link href="https://fonts.bunny.net/css?family=figtree:400,500,600&display=swap" rel="stylesheet" />
 
-        <!-- Scripts -->
+        <!-- DigitalPersona Web SDK — must be before React boots -->
+        <script src="{{ asset('vendor/digitalpersona/es6-shim.js') }}"></script>
+        <script src="{{ asset('vendor/digitalpersona/websdk.client.bundle.min.js') }}"></script>
+        <script src="{{ asset('vendor/digitalpersona/fingerprint.sdk.min.js') }}"></script>  {{-- ← this was missing --}}
+
         @routes
         @viteReactRefresh
         @vite(['resources/js/app.jsx', "resources/js/Pages/{$page['component']}.jsx"])

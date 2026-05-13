@@ -56,13 +56,13 @@ export default function NavLinks({ isSidebarOpen }) {
                 isSidebarOpen={isSidebarOpen}
             />
             <SidebarLink
-                href={route("scan-logs.index")}
+                href={route("scan-logs")}
                 icon={<Clock size={20} />}
                 label="Scan Log"
                 isSidebarOpen={isSidebarOpen}
             />
             <SidebarLink
-                href={route("register-fingerprint.index")}
+                href={route("register-fingerprint")}
                 icon={<Fingerprint size={20} />}
                 label="Register Fingerprint"
                 isSidebarOpen={isSidebarOpen}
