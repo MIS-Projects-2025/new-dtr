@@ -14,7 +14,8 @@ class FingerprintTemplate extends Model
 
     protected $fillable = [
         'employid',
-        'template_data',   // stored as standard base64 string
+        'template_data',
+        'fmd_data',
         'device_type',
         'finger_index',
         'quality',

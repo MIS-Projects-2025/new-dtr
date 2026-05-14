@@ -53,23 +53,34 @@ class RegisterFingerprintController extends Controller
     {
         $validated = $request->validate([
             'employid'      => 'required|string|max:50',
-            'template_data' => 'required|string',   // base64
+            'template_data' => 'required|string',   // base64 PNG
             'device_type'   => 'required|string|max:100',
             'finger_index'  => 'required|integer|min:0|max:9',
             'quality'       => 'required|integer|min:0|max:100',
         ]);
 
-        DB::beginTransaction();
-
+        // Extract SourceAFIS FMD from the PNG
+        $fingerprintService = app(\App\Services\FingerprintService::class);
         try {
-            // Soft-delete the previous template for this employee + finger
+            $cleanPng = strtr($validated['template_data'], '-_', '+/');
+            $fmd = $fingerprintService->extractFmd($cleanPng);
+        } catch (\Throwable $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'FMD extraction failed: ' . $e->getMessage(),
+            ], 422);
+        }
+
+        DB::beginTransaction();
+        try {
             FingerprintTemplate::where('employid', $validated['employid'])
                 ->where('finger_index', $validated['finger_index'])
                 ->update(['is_active' => 0]);
 
             $template = FingerprintTemplate::create([
                 'employid'      => $validated['employid'],
-                'template_data' => $validated['template_data'],
+                'template_data' => $validated['template_data'], // keep PNG for display
+                'fmd_data'      => $fmd,                        // SourceAFIS template
                 'device_type'   => $validated['device_type'],
                 'finger_index'  => $validated['finger_index'],
                 'quality'       => $validated['quality'],
@@ -78,18 +89,10 @@ class RegisterFingerprintController extends Controller
             ]);
 
             DB::commit();
-
-            return response()->json([
-                'success'     => true,
-                'message'     => 'Fingerprint registered successfully.',
-                'id'          => $template->id,
-                'finger_index'=> $template->finger_index,
-                'quality'     => $template->quality,
-            ]);
+            return response()->json(['success' => true, 'id' => $template->id]);
 
         } catch (\Throwable $e) {
             DB::rollBack();
-            \Log::error('Fingerprint store error: ' . $e->getMessage());
             return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
         }
     }

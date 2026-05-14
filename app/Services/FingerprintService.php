@@ -181,4 +181,73 @@ class FingerprintService
     {
         return $this->discoverPort();
     }
+
+    private function callWorker(array $payload): array
+{
+    $scriptPath = config('fingerprint.script_path');
+
+    if (!file_exists($scriptPath)) {
+        throw new \RuntimeException("Worker not found at: {$scriptPath}");
+    }
+
+    $descriptors = [
+        0 => ['pipe', 'r'],
+        1 => ['pipe', 'w'],
+        2 => ['pipe', 'w'],
+    ];
+
+    $proc = proc_open(escapeshellarg($scriptPath), $descriptors, $pipes);
+    if (!is_resource($proc)) {
+        throw new \RuntimeException('Could not launch fingerprint worker.');
+    }
+
+    fwrite($pipes[0], json_encode($payload));
+    fclose($pipes[0]);
+
+    $stdout = stream_get_contents($pipes[1]);
+    $stderr = stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    proc_close($proc);
+
+    if ($stderr) \Log::warning('[FP Worker] ' . $stderr);
+
+    $decoded = json_decode(trim($stdout), true);
+    if (json_last_error() !== JSON_ERROR_NONE) {
+        throw new \RuntimeException('Worker returned invalid JSON: ' . $stdout);
+    }
+    if (isset($decoded['error'])) {
+        throw new \RuntimeException('Worker error: ' . $decoded['error']);
+    }
+
+    return $decoded;
+}
+
+public function extractFmd(string $base64Png): string
+{
+    // Normalize URL-safe base64 → standard base64
+    $base64Png = strtr($base64Png, '-_', '+/');
+
+    $result = $this->callWorker([
+        'action' => 'extract',
+        'image'  => $base64Png,
+        'dpi'    => config('fingerprint.dpi'),
+    ]);
+    return $result['fmd'];
+}
+
+public function matchFmd(string $probePng, array $candidates): array
+{
+    // Normalize URL-safe base64 → standard base64
+    $probePng = strtr($probePng, '-_', '+/');
+
+    $result = $this->callWorker([
+        'action'     => 'match',
+        'probe'      => $probePng,
+        'candidates' => $candidates,
+        'dpi'        => config('fingerprint.dpi'),
+    ]);
+    return $result['scores'];
+}
+
 }
