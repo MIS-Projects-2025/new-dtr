@@ -274,17 +274,28 @@ if ($isWithBreaks) {
             // Fetch all punches for this employee once
             $preNormalizedLogs = [$empId => []];
             $sql = "
-                SELECT datetime, punch_type
-                FROM biometric_logs
-                WHERE employid = ? AND datetime BETWEEN ? AND ?
-                UNION ALL
-                SELECT datetime, punch_type
-                FROM biometric_logs_manual
-                WHERE employid = ? AND datetime BETWEEN ? AND ?
-                ORDER BY datetime
-            ";
-            $stmt = $pdo->prepare($sql);
-            $stmt->execute([$empId, $empFrom, $empTo, $empId, $empFrom, $empTo]);
+    SELECT CONVERT(datetime USING utf8mb4) COLLATE utf8mb4_general_ci AS datetime,
+           CONVERT(punch_type USING utf8mb4) COLLATE utf8mb4_general_ci AS punch_type
+    FROM biometric_logs
+    WHERE employid = ? AND datetime BETWEEN ? AND ?
+    UNION ALL
+    SELECT CONVERT(datetime USING utf8mb4) COLLATE utf8mb4_general_ci,
+           CONVERT(punch_type USING utf8mb4) COLLATE utf8mb4_general_ci
+    FROM biometric_logs_manual
+    WHERE employid = ? AND datetime BETWEEN ? AND ?
+    UNION ALL
+    SELECT CONVERT(CONCAT(log_date, ' ', log_time) USING utf8mb4) COLLATE utf8mb4_general_ci,
+           CONVERT(log_type USING utf8mb4) COLLATE utf8mb4_general_ci
+    FROM vp_logs
+    WHERE employee_id = ? AND log_date BETWEEN ? AND ?
+    ORDER BY datetime
+";
+$stmt = $pdo->prepare($sql);
+$stmt->execute([
+    $empId, $empFrom, $empTo,
+    $empId, $empFrom, $empTo,
+    $empId, $this->dateFrom, $this->dateTo,
+]);
             $stmt->setFetchMode(\PDO::FETCH_OBJ);
             while ($r = $stmt->fetch()) {
                 $dt = \Carbon\Carbon::parse($r->datetime);

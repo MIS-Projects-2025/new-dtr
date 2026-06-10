@@ -96,13 +96,14 @@ class DtrLogService
      * Same as resolveLogsForEmployees but accepts pre-fetched raw logs
      * grouped by employid to avoid repeated DB queries across date ranges.
      */
-    public function resolveLogsForEmployeesFromRaw(
+public function resolveLogsForEmployeesFromRaw(
     array      $employIds,
     array      $timeWindowsMap,
     array      $scheduleTypeMap,
     string     $date,
     Collection $allBioLogs,
-    Collection $allManualLogs
+    Collection $allManualLogs,
+    Collection $allVpLogs = null
 ): array {
     if (empty($employIds)) return [];
 
@@ -143,6 +144,32 @@ class DtrLogService
                 'type'     => $this->mapPunchType($row->punch_type),
                 'source'   => 'manual',
             ];
+        }
+
+        if ($allVpLogs) {
+            foreach ($allVpLogs->get($key, collect()) as $row) {
+                try {
+                    $logDate  = $row->log_date instanceof \Carbon\Carbon
+                        ? $row->log_date->format('Y-m-d')
+                        : substr((string) $row->log_date, 0, 10);
+                    $logTime  = $row->log_time instanceof \Carbon\Carbon
+                        ? $row->log_time->format('H:i:s')
+                        : (string) $row->log_time;
+                    $datetime = $logDate . ' ' . $logTime;
+                    if ($logDate < $from || $logDate > $to) continue;
+                    $dt = Carbon::parse($datetime);
+                    $logs[] = [
+                        'employid' => $key,
+                        'datetime' => $dt->toDateTimeString(),
+                        'date'     => $dt->toDateString(),
+                        'time'     => $dt->format('H:i'),
+                        'type'     => $this->mapPunchType($row->log_type),
+                        'source'   => 'vp',
+                    ];
+                } catch (\Throwable $e) {
+                    \Log::warning('[VPLog] Skipped row in fromRaw: ' . $e->getMessage());
+                }
+            }
         }
 
         if (!empty($logs)) {
@@ -349,6 +376,29 @@ private function filterLogsForDateFast(
             $grouped[$row->employid][] = $this->normalizeLog(
                 $row->employid, $row->datetime, $row->punch_type, 'manual'
             );
+        }
+
+        $vpLogs = \App\Models\VPLog::whereIn('employee_id', $employIds)
+            ->whereBetween('log_date', [$from, $to])
+            ->orderBy('log_date')
+            ->orderBy('log_time')
+            ->get(['employee_id', 'log_date', 'log_time', 'log_type']);
+
+        foreach ($vpLogs as $row) {
+            try {
+                $logDate  = $row->log_date instanceof \Carbon\Carbon
+                    ? $row->log_date->format('Y-m-d')
+                    : substr((string) $row->log_date, 0, 10);
+                $logTime  = $row->log_time instanceof \Carbon\Carbon
+                    ? $row->log_time->format('H:i:s')
+                    : (string) $row->log_time;
+                $datetime = $logDate . ' ' . $logTime;
+                $grouped[$row->employee_id][] = $this->normalizeLog(
+                    (string) $row->employee_id, $datetime, $row->log_type, 'vp'
+                );
+            } catch (\Throwable $e) {
+                \Log::warning('[VPLog] Skipped row: ' . $e->getMessage());
+            }
         }
 
         // Sort each employee's logs by datetime

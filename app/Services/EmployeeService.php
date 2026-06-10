@@ -2051,23 +2051,50 @@ public function getDtrRowsForEmployee(
     $preNormalizedLogs = [];
  
     foreach (['biometric_logs', 'biometric_logs_manual'] as $table) {
-        DB::table($table)
-            ->where('employid', $employId)
-            ->whereBetween('datetime', [$from . ' 00:00:00', $to . ' 23:59:59'])
-            ->orderBy('datetime')
-            ->select(['employid', 'datetime', 'punch_type'])
+            DB::table($table)
+                ->where('employid', $employId)
+                ->whereBetween('datetime', [$from . ' 00:00:00', $to . ' 23:59:59'])
+                ->orderBy('datetime')
+                ->select(['employid', 'datetime', 'punch_type'])
+                ->each(function ($row) use (&$preNormalizedLogs, $punchMap) {
+                    $dt = Carbon::parse($row->datetime);
+                    $preNormalizedLogs[$row->employid][] = [
+                        'employid' => (string) $row->employid,
+                        'datetime' => $row->datetime,
+                        'date'     => $dt->toDateString(),
+                        'time'     => $dt->format('H:i'),
+                        'type'     => $punchMap[(string) $row->punch_type] ?? 'check_in',
+                        'source'   => 'mixed',
+                    ];
+                });
+        }
+
+        \App\Models\VPLog::where('employee_id', $employId)
+            ->whereBetween('log_date', [$from, $to])
+            ->orderBy('log_date')
+            ->orderBy('log_time')
             ->each(function ($row) use (&$preNormalizedLogs, $punchMap) {
-                $dt = Carbon::parse($row->datetime);
-                $preNormalizedLogs[$row->employid][] = [
-                    'employid' => (string) $row->employid,
-                    'datetime' => $row->datetime,
-                    'date'     => $dt->toDateString(),
-                    'time'     => $dt->format('H:i'),
-                    'type'     => $punchMap[(string) $row->punch_type] ?? 'check_in',
-                    'source'   => 'mixed',
-                ];
+                try {
+                    $logDate  = $row->log_date instanceof \Carbon\Carbon
+                        ? $row->log_date->format('Y-m-d')
+                        : substr((string) $row->log_date, 0, 10);
+                    $logTime  = $row->log_time instanceof \Carbon\Carbon
+                        ? $row->log_time->format('H:i:s')
+                        : (string) $row->log_time;
+                    $datetime = $logDate . ' ' . $logTime;
+                    $dt = \Carbon\Carbon::parse($datetime);
+                    $preNormalizedLogs[(string) $row->employee_id][] = [
+                        'employid' => (string) $row->employee_id,
+                        'datetime' => $dt->toDateTimeString(),
+                        'date'     => $dt->toDateString(),
+                        'time'     => $dt->format('H:i'),
+                        'type'     => $punchMap[(string) $row->log_type] ?? 'check_in',
+                        'source'   => 'vp',
+                    ];
+                } catch (\Throwable $e) {
+                    \Log::warning('[VPLog] Skipped row for employee: ' . $e->getMessage());
+                }
             });
-    }
  
     // Sort once
     foreach ($preNormalizedLogs as &$logs) {
@@ -2380,29 +2407,56 @@ public function getExportData(array $filters, string $dateFrom, string $dateTo):
     $preNormalizedLogs = []; // [empId => [ [...punch], ... ]]
  
     foreach (['biometric_logs', 'biometric_logs_manual'] as $table) {
-        DB::table($table)
-            ->whereIn('employid', $employIds)
-            ->whereBetween('datetime', [$from . ' 00:00:00', $to . ' 23:59:59'])
-            ->orderBy('datetime')
-            ->select(['employid', 'datetime', 'punch_type'])
+            DB::table($table)
+                ->whereIn('employid', $employIds)
+                ->whereBetween('datetime', [$from . ' 00:00:00', $to . ' 23:59:59'])
+                ->orderBy('datetime')
+                ->select(['employid', 'datetime', 'punch_type'])
+                ->each(function ($row) use (&$preNormalizedLogs, $punchMap) {
+                    $dt = Carbon::parse($row->datetime);
+                    $preNormalizedLogs[(string) $row->employid][] = [
+                        'employid' => (string) $row->employid,
+                        'datetime' => $row->datetime,
+                        'date'     => $dt->toDateString(),
+                        'time'     => $dt->format('H:i'),
+                        'type'     => $punchMap[(string) $row->punch_type] ?? 'check_in',
+                        'source'   => 'mixed',
+                    ];
+                });
+        }
+
+        \App\Models\VPLog::whereIn('employee_id', $employIds)
+            ->whereBetween('log_date', [$from, $to])
+            ->orderBy('log_date')
+            ->orderBy('log_time')
             ->each(function ($row) use (&$preNormalizedLogs, $punchMap) {
-                $dt = Carbon::parse($row->datetime);
-                $preNormalizedLogs[(string) $row->employid][] = [
-                    'employid' => (string) $row->employid,
-                    'datetime' => $row->datetime,
-                    'date'     => $dt->toDateString(),
-                    'time'     => $dt->format('H:i'),
-                    'type'     => $punchMap[(string) $row->punch_type] ?? 'check_in',
-                    'source'   => 'mixed',
-                ];
+                try {
+                    $logDate  = $row->log_date instanceof \Carbon\Carbon
+                        ? $row->log_date->format('Y-m-d')
+                        : substr((string) $row->log_date, 0, 10);
+                    $logTime  = $row->log_time instanceof \Carbon\Carbon
+                        ? $row->log_time->format('H:i:s')
+                        : (string) $row->log_time;
+                    $datetime = $logDate . ' ' . $logTime;
+                    $dt = \Carbon\Carbon::parse($datetime);
+                    $preNormalizedLogs[(string) $row->employee_id][] = [
+                        'employid' => (string) $row->employee_id,
+                        'datetime' => $dt->toDateTimeString(),
+                        'date'     => $dt->toDateString(),
+                        'time'     => $dt->format('H:i'),
+                        'type'     => $punchMap[(string) $row->log_type] ?? 'check_in',
+                        'source'   => 'vp',
+                    ];
+                } catch (\Throwable $e) {
+                    \Log::warning('[VPLog] Skipped row in preNormalized: ' . $e->getMessage());
+                }
             });
-    }
- 
-    // Sort each employee's logs by datetime once (used by resolveLogsFromPreNormalized)
-    foreach ($preNormalizedLogs as &$logs) {
-        usort($logs, fn($a, $b) => strcmp($a['datetime'], $b['datetime']));
-    }
-    unset($logs);
+
+        // Sort once
+        foreach ($preNormalizedLogs as &$logs) {
+            usort($logs, fn($a, $b) => strcmp($a['datetime'], $b['datetime']));
+        }
+        unset($logs);
  
     // ── 4. Leaves — expand into per-employee/per-date set (one query) ─────
     $leavesByEmpDate = [];
