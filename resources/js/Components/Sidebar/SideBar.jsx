@@ -29,7 +29,7 @@ import {
     MonitorSmartphone,
     ShieldAlert,
     ShieldCheck,
-    FileWarning,
+    CalendarClock,
 } from "lucide-react";
 
 export default function Sidebar() {
@@ -163,7 +163,7 @@ export default function Sidebar() {
                             )}
                         >
                             <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 bg-primary shadow-md">
-                                <FileWarning className="w-4 h-4 text-primary-foreground" />
+                                <CalendarClock  className="w-4 h-4 text-primary-foreground" />
                             </div>
 
                             {isSidebarOpen && (
@@ -178,7 +178,7 @@ export default function Sidebar() {
                                         className="text-[7px] font-medium tracking-widest uppercase
                                         text-primary/70"
                                     >
-                                        Workspace
+                                        Telford Svc. Phils. Inc.
                                     </span>
                                 </div>
                             )}
