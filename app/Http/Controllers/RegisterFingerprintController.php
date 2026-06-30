@@ -59,11 +59,12 @@ class RegisterFingerprintController extends Controller
             'quality'       => 'required|integer|min:0|max:100',
         ]);
 
-        // Extract SourceAFIS FMD from the PNG
         $fingerprintService = app(\App\Services\FingerprintService::class);
+
         try {
-            $cleanPng = strtr($validated['template_data'], '-_', '+/');
-            $fmd = $fingerprintService->extractFmd($cleanPng);
+            // Both HID and SecuGen now send image data (PNG/BMP) — same extraction path
+            $cleanImage = strtr($validated['template_data'], '-_', '+/');
+            $fmd = $fingerprintService->extractFmd($cleanImage);
         } catch (\Throwable $e) {
             return response()->json([
                 'success' => false,

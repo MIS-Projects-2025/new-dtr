@@ -6,30 +6,46 @@ import axios from "axios";
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const FINGER_LABELS = [
-    "R. Thumb", "R. Index", "R. Middle", "R. Ring", "R. Little",
-    "L. Thumb", "L. Index", "L. Middle", "L. Ring",  "L. Little",
+    "R. Thumb",
+    "R. Index",
+    "R. Middle",
+    "R. Ring",
+    "R. Little",
+    "L. Thumb",
+    "L. Index",
+    "L. Middle",
+    "L. Ring",
+    "L. Little",
 ];
 
 const FINGER_FULL = [
-    "Right Thumb", "Right Index", "Right Middle", "Right Ring",  "Right Little",
-    "Left Thumb",  "Left Index",  "Left Middle",  "Left Ring",   "Left Little",
+    "Right Thumb",
+    "Right Index",
+    "Right Middle",
+    "Right Ring",
+    "Right Little",
+    "Left Thumb",
+    "Left Index",
+    "Left Middle",
+    "Left Ring",
+    "Left Little",
 ];
 
 // RIGHT hand: indices 0–4 | LEFT hand: 5–9
 // Visual positions for each finger on the hand diagram (percent from left, percent from top)
 const RIGHT_POSITIONS = [
-    { left: "10%", top: "55%" },  // Thumb
-    { left: "28%", top: "28%" },  // Index
-    { left: "44%", top: "20%" },  // Middle
-    { left: "60%", top: "25%" },  // Ring
-    { left: "74%", top: "36%" },  // Little
+    { left: "10%", top: "55%" }, // Thumb
+    { left: "28%", top: "28%" }, // Index
+    { left: "44%", top: "20%" }, // Middle
+    { left: "60%", top: "25%" }, // Ring
+    { left: "74%", top: "36%" }, // Little
 ];
 const LEFT_POSITIONS = [
-    { left: "90%", top: "55%" },  // Thumb
-    { left: "72%", top: "28%" },  // Index
-    { left: "56%", top: "20%" },  // Middle
-    { left: "40%", top: "25%" },  // Ring
-    { left: "26%", top: "36%" },  // Little
+    { left: "90%", top: "55%" }, // Thumb
+    { left: "72%", top: "28%" }, // Index
+    { left: "56%", top: "20%" }, // Middle
+    { left: "40%", top: "25%" }, // Ring
+    { left: "26%", top: "36%" }, // Little
 ];
 
 // ── Fingerprint scanner hook ──────────────────────────────────────────────────
@@ -43,8 +59,8 @@ const LEFT_POSITIONS = [
 // DigitalPersona Lite Client must be installed: https://crossmatch.hid.gl/lite-client/
 
 function useDigitalPersona() {
-    const clientRef   = useRef(null);
-    const deviceRef   = useRef(null);
+    const clientRef = useRef(null);
+    const deviceRef = useRef(null);
     const [deviceStatus, setDeviceStatus] = useState("connecting");
 
     useEffect(() => {
@@ -56,13 +72,16 @@ function useDigitalPersona() {
 
             // ── 1. Find the SDK namespace ──────────────────────────────────
             const sdk =
-                window.Fingerprint      ??   // most common
-                window.DigitalPersona   ??   // some builds
-                window.FingerprintSdk   ??   // older builds
+                window.Fingerprint ?? // most common
+                window.DigitalPersona ?? // some builds
+                window.FingerprintSdk ?? // older builds
                 null;
 
             console.log("[DP] window.Fingerprint      →", window.Fingerprint);
-            console.log("[DP] window.DigitalPersona   →", window.DigitalPersona);
+            console.log(
+                "[DP] window.DigitalPersona   →",
+                window.DigitalPersona,
+            );
             console.log("[DP] resolved sdk            →", sdk);
             console.log("[DP] sdk?.WebApi             →", sdk?.WebApi);
 
@@ -86,7 +105,11 @@ function useDigitalPersona() {
             console.log("[DP] WebApi client created:", client);
 
             client.onDeviceConnected = (e) => {
-                console.log("[DP] onDeviceConnected raw event:", e, JSON.stringify(e));
+                console.log(
+                    "[DP] onDeviceConnected raw event:",
+                    e,
+                    JSON.stringify(e),
+                );
                 deviceRef.current =
                     e?.deviceUid ?? e?.deviceID ?? e?.uid ?? "auto";
                 setDeviceStatus("ready");
@@ -102,6 +125,25 @@ function useDigitalPersona() {
                 console.warn("[DP] onCommunicationFailed:", e);
                 setDeviceStatus("disconnected");
             };
+
+            // If onDeviceConnected hasn't fired after 2s, check via startAcquisition
+            // but immediately stop it — we just need to know if the device responds
+            setTimeout(() => {
+                if (deviceRef.current !== null || cancelled) return;
+                const SampleFormat =
+                    sdk.SampleFormat ?? sdk.Formats?.SampleFormat;
+                client
+                    .startAcquisition(SampleFormat.PngImage)
+                    .then(() => {
+                        deviceRef.current = "auto";
+                        setDeviceStatus("ready");
+                        // Stop immediately — this is detection only, not a real capture
+                        return client.stopAcquisition();
+                    })
+                    .catch(() => {
+                        if (!cancelled) setDeviceStatus("disconnected");
+                    });
+            }, 2000);
         };
 
         // Start polling once the document is interactive/complete
@@ -114,70 +156,128 @@ function useDigitalPersona() {
         return () => {
             cancelled = true;
             clearTimeout(pollTimer);
-            try { clientRef.current?.stopAcquisition(); } catch {}
+            try {
+                clientRef.current?.stopAcquisition();
+            } catch {}
         };
     }, []);
 
     const capture = useCallback(() => {
         return new Promise((resolve, reject) => {
-            const sdk    =
-                window.Fingerprint    ??
+            const sdk =
+                window.Fingerprint ??
                 window.DigitalPersona ??
                 window.FingerprintSdk ??
                 null;
             const client = clientRef.current;
 
-            console.log("[DP] capture() — sdk:", sdk, "client:", client, "deviceRef:", deviceRef.current);
+            console.log(
+                "[DP] capture() — sdk:",
+                sdk,
+                "client:",
+                client,
+                "deviceRef:",
+                deviceRef.current,
+            );
 
             if (!sdk || !client) {
-                return reject(new Error(
-                    `SDK not ready. sdk=${!!sdk} client=${!!client}. ` +
-                    `Check the console for [DP] logs.`
-                ));
+                return reject(
+                    new Error(
+                        `SDK not ready. sdk=${!!sdk} client=${!!client}.`,
+                    ),
+                );
             }
 
             let qualityScore = 80;
+            let settled = false;
+
+            const settle = (fn) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timeoutHandle);
+                client.stopAcquisition().catch(() => {});
+                fn();
+            };
+
+            // 20-second hard timeout in case no event fires at all
+            const timeoutHandle = setTimeout(() => {
+                settle(() =>
+                    reject(
+                        new Error(
+                            "Scan timed out — no finger detected within 20 seconds.",
+                        ),
+                    ),
+                );
+            }, 20000);
 
             client.onQualityReported = (e) => {
-                qualityScore = e.quality === 0 ? 90 : Math.max(10, 80 - e.quality * 10);
+                console.log("[DP] onQualityReported:", e);
+                qualityScore =
+                    e.quality === 0 ? 90 : Math.max(10, 80 - e.quality * 10);
             };
 
             client.onSamplesAcquired = (e) => {
+                console.log("[DP] onSamplesAcquired:", e);
                 try {
-                    const samples    = JSON.parse(e.samples);
-                    let   base64Data = samples[0]?.Data ?? samples[0];
-
-                    // SDK returns URL-safe base64 (- and _).
-                    // Convert to standard base64 (+ and /) for the img tag and PHP's base64_decode().
+                    const samples = JSON.parse(e.samples);
+                    let base64Data = samples[0]?.Data ?? samples[0];
                     base64Data = base64Data
                         .replace(/-/g, "+")
                         .replace(/_/g, "/");
-
-                    client.stopAcquisition().catch(() => {});
-                    resolve({
-                        template : base64Data,
-                        quality  : qualityScore,
-                        bitmap   : base64Data,
-                        device   : "DigitalPersona U.are.U 4500",
-                    });
+                    settle(() =>
+                        resolve({
+                            template: base64Data,
+                            quality: qualityScore,
+                            bitmap: base64Data,
+                            device: "DigitalPersona U.are.U 4500",
+                        }),
+                    );
                 } catch (err) {
-                    reject(new Error("Failed to parse fingerprint sample: " + err.message));
+                    settle(() =>
+                        reject(
+                            new Error(
+                                "Failed to parse fingerprint sample: " +
+                                    err.message,
+                            ),
+                        ),
+                    );
                 }
             };
 
             client.onErrorOccurred = (e) => {
                 console.error("[DP] onErrorOccurred:", e);
-                reject(new Error(`Scanner error: ${e?.error ?? JSON.stringify(e)}`));
+                settle(() =>
+                    reject(
+                        new Error(
+                            `Scanner error: ${e?.error ?? JSON.stringify(e)}`,
+                        ),
+                    ),
+                );
             };
 
             const SampleFormat = sdk.SampleFormat ?? sdk.Formats?.SampleFormat;
 
-            // Always use "any device" default — deviceRef is null at call-time since
-            // onDeviceConnected fires asynchronously after startAcquisition is called.
-            client.startAcquisition(SampleFormat.PngImage)
-                .catch(err => {
-                    console.error("[DP] startAcquisition rejected:", err);
-                    reject(new Error(err?.message ?? "Failed to start acquisition."));
+            // Stop any leftover acquisition (from probe or previous scan) before starting fresh
+            client
+                .stopAcquisition()
+                .catch(() => {})
+                .finally(() => {
+                    client
+                        .startAcquisition(SampleFormat.PngImage)
+                        .catch((err) => {
+                            console.error(
+                                "[DP] startAcquisition rejected:",
+                                err,
+                            );
+                            settle(() =>
+                                reject(
+                                    new Error(
+                                        err?.message ??
+                                            "Failed to start acquisition.",
+                                    ),
+                                ),
+                            );
+                        });
                 });
         });
     }, []);
@@ -185,10 +285,70 @@ function useDigitalPersona() {
     return { capture, deviceStatus };
 }
 
+// ── SecuGen Hook ──────────────────────────────────────────────────────────────
+
+function useSecuGen() {
+    const [deviceStatus, setDeviceStatus] = useState("connecting");
+
+    useEffect(() => {
+        fetch("http://localhost:8000/SGIFPCapture?Timeout=1000&Quality=50", {
+            mode: "cors",
+        })
+            .then(() => setDeviceStatus("ready"))
+            .catch(() => setDeviceStatus("disconnected"));
+    }, []);
+
+    const capture = useCallback(
+        () =>
+            new Promise((resolve, reject) => {
+                fetch(
+                    "http://localhost:8000/SGIFPCapture?Timeout=15000&Quality=50&TemplateFormat=ISO&ImageWSQRate=0",
+                    { mode: "cors" },
+                )
+                    .then((r) => r.json())
+                    .then((data) => {
+                        if (data.ErrorCode !== 0)
+                            return reject(
+                                new Error(`SecuGen error ${data.ErrorCode}`),
+                            );
+                        // Use BMPBase64 (raw image) so SourceAFIS can extract FMD the same
+                        // way it does for DigitalPersona — no ISO parsing needed
+                        const imageData =
+                            data.BMPBase64 ?? data.ImageDataBase64;
+                        if (!imageData)
+                            return reject(
+                                new Error("SecuGen returned no image data."),
+                            );
+                        resolve({
+                            template: imageData,
+                            quality: data.ImageQuality ?? 80,
+                            bitmap: data.BMPBase64,
+                            device: `SecuGen ${data.Model ?? ""}`.trim(),
+                        });
+                    })
+                    .catch(() =>
+                        reject(
+                            new Error(
+                                "SecuGen service not reachable. Is SgiBioSrv running?",
+                            ),
+                        ),
+                    );
+            }),
+        [],
+    );
+
+    return { capture, deviceStatus };
+}
+
 // ── Sub-components ────────────────────────────────────────────────────────────
 
 function QualityBar({ quality }) {
-    const color = quality >= 70 ? "bg-green-500" : quality >= 40 ? "bg-amber-400" : "bg-red-500";
+    const color =
+        quality >= 70
+            ? "bg-green-500"
+            : quality >= 40
+              ? "bg-amber-400"
+              : "bg-red-500";
     return (
         <div className="flex items-center gap-2">
             <div className="flex-1 h-2 rounded-full bg-zinc-200 dark:bg-zinc-700 overflow-hidden">
@@ -204,13 +364,21 @@ function QualityBar({ quality }) {
     );
 }
 
-function HandDiagram({ hand = "right", registeredIndices = [], selectedIndex, onSelect }) {
-    const isRight     = hand === "right";
-    const baseIndex   = isRight ? 0 : 5;
-    const positions   = isRight ? RIGHT_POSITIONS : LEFT_POSITIONS;
+function HandDiagram({
+    hand = "right",
+    registeredIndices = [],
+    selectedIndex,
+    onSelect,
+}) {
+    const isRight = hand === "right";
+    const baseIndex = isRight ? 0 : 5;
+    const positions = isRight ? RIGHT_POSITIONS : LEFT_POSITIONS;
 
     return (
-        <div className="relative select-none" style={{ width: "100%", paddingBottom: "75%" }}>
+        <div
+            className="relative select-none"
+            style={{ width: "100%", paddingBottom: "75%" }}
+        >
             {/* Palm shape */}
             <svg
                 className="absolute inset-0 w-full h-full"
@@ -218,46 +386,136 @@ function HandDiagram({ hand = "right", registeredIndices = [], selectedIndex, on
                 xmlns="http://www.w3.org/2000/svg"
             >
                 {/* Palm */}
-                <ellipse cx="100" cy="105" rx="55" ry="38"
+                <ellipse
+                    cx="100"
+                    cy="105"
+                    rx="55"
+                    ry="38"
                     className="fill-zinc-100 dark:fill-zinc-800 stroke-zinc-300 dark:stroke-zinc-600"
-                    strokeWidth="1.5" />
+                    strokeWidth="1.5"
+                />
                 {/* Fingers - simplified silhouette */}
                 {isRight ? (
                     <>
-                        <rect x="20"  y="64" width="18" height="48" rx="9"  className="fill-zinc-100 dark:fill-zinc-800 stroke-zinc-300 dark:stroke-zinc-600" strokeWidth="1.5" />
-                        <rect x="48"  y="28" width="18" height="60" rx="9"  className="fill-zinc-100 dark:fill-zinc-800 stroke-zinc-300 dark:stroke-zinc-600" strokeWidth="1.5" />
-                        <rect x="72"  y="20" width="18" height="68" rx="9"  className="fill-zinc-100 dark:fill-zinc-800 stroke-zinc-300 dark:stroke-zinc-600" strokeWidth="1.5" />
-                        <rect x="96"  y="25" width="18" height="63" rx="9"  className="fill-zinc-100 dark:fill-zinc-800 stroke-zinc-300 dark:stroke-zinc-600" strokeWidth="1.5" />
-                        <rect x="120" y="38" width="18" height="52" rx="9"  className="fill-zinc-100 dark:fill-zinc-800 stroke-zinc-300 dark:stroke-zinc-600" strokeWidth="1.5" />
+                        <rect
+                            x="20"
+                            y="64"
+                            width="18"
+                            height="48"
+                            rx="9"
+                            className="fill-zinc-100 dark:fill-zinc-800 stroke-zinc-300 dark:stroke-zinc-600"
+                            strokeWidth="1.5"
+                        />
+                        <rect
+                            x="48"
+                            y="28"
+                            width="18"
+                            height="60"
+                            rx="9"
+                            className="fill-zinc-100 dark:fill-zinc-800 stroke-zinc-300 dark:stroke-zinc-600"
+                            strokeWidth="1.5"
+                        />
+                        <rect
+                            x="72"
+                            y="20"
+                            width="18"
+                            height="68"
+                            rx="9"
+                            className="fill-zinc-100 dark:fill-zinc-800 stroke-zinc-300 dark:stroke-zinc-600"
+                            strokeWidth="1.5"
+                        />
+                        <rect
+                            x="96"
+                            y="25"
+                            width="18"
+                            height="63"
+                            rx="9"
+                            className="fill-zinc-100 dark:fill-zinc-800 stroke-zinc-300 dark:stroke-zinc-600"
+                            strokeWidth="1.5"
+                        />
+                        <rect
+                            x="120"
+                            y="38"
+                            width="18"
+                            height="52"
+                            rx="9"
+                            className="fill-zinc-100 dark:fill-zinc-800 stroke-zinc-300 dark:stroke-zinc-600"
+                            strokeWidth="1.5"
+                        />
                     </>
                 ) : (
                     <>
-                        <rect x="162" y="64" width="18" height="48" rx="9"  className="fill-zinc-100 dark:fill-zinc-800 stroke-zinc-300 dark:stroke-zinc-600" strokeWidth="1.5" />
-                        <rect x="134" y="28" width="18" height="60" rx="9"  className="fill-zinc-100 dark:fill-zinc-800 stroke-zinc-300 dark:stroke-zinc-600" strokeWidth="1.5" />
-                        <rect x="110" y="20" width="18" height="68" rx="9"  className="fill-zinc-100 dark:fill-zinc-800 stroke-zinc-300 dark:stroke-zinc-600" strokeWidth="1.5" />
-                        <rect x="86"  y="25" width="18" height="63" rx="9"  className="fill-zinc-100 dark:fill-zinc-800 stroke-zinc-300 dark:stroke-zinc-600" strokeWidth="1.5" />
-                        <rect x="62"  y="38" width="18" height="52" rx="9"  className="fill-zinc-100 dark:fill-zinc-800 stroke-zinc-300 dark:stroke-zinc-600" strokeWidth="1.5" />
+                        <rect
+                            x="162"
+                            y="64"
+                            width="18"
+                            height="48"
+                            rx="9"
+                            className="fill-zinc-100 dark:fill-zinc-800 stroke-zinc-300 dark:stroke-zinc-600"
+                            strokeWidth="1.5"
+                        />
+                        <rect
+                            x="134"
+                            y="28"
+                            width="18"
+                            height="60"
+                            rx="9"
+                            className="fill-zinc-100 dark:fill-zinc-800 stroke-zinc-300 dark:stroke-zinc-600"
+                            strokeWidth="1.5"
+                        />
+                        <rect
+                            x="110"
+                            y="20"
+                            width="18"
+                            height="68"
+                            rx="9"
+                            className="fill-zinc-100 dark:fill-zinc-800 stroke-zinc-300 dark:stroke-zinc-600"
+                            strokeWidth="1.5"
+                        />
+                        <rect
+                            x="86"
+                            y="25"
+                            width="18"
+                            height="63"
+                            rx="9"
+                            className="fill-zinc-100 dark:fill-zinc-800 stroke-zinc-300 dark:stroke-zinc-600"
+                            strokeWidth="1.5"
+                        />
+                        <rect
+                            x="62"
+                            y="38"
+                            width="18"
+                            height="52"
+                            rx="9"
+                            className="fill-zinc-100 dark:fill-zinc-800 stroke-zinc-300 dark:stroke-zinc-600"
+                            strokeWidth="1.5"
+                        />
                     </>
                 )}
             </svg>
 
             {/* Clickable finger dots */}
             {positions.map((pos, i) => {
-                const globalIdx  = baseIndex + i;
-                const isReg      = registeredIndices.includes(globalIdx);
+                const globalIdx = baseIndex + i;
+                const isReg = registeredIndices.includes(globalIdx);
                 const isSelected = selectedIndex === globalIdx;
 
                 return (
                     <button
                         key={globalIdx}
                         onClick={() => onSelect(globalIdx)}
-                        style={{ left: pos.left, top: pos.top, transform: "translate(-50%,-50%)" }}
+                        style={{
+                            left: pos.left,
+                            top: pos.top,
+                            transform: "translate(-50%,-50%)",
+                        }}
                         className={`absolute w-7 h-7 rounded-full border-2 transition-all duration-200 flex items-center justify-center text-[8px] font-bold z-10
-                            ${isSelected
-                                ? "border-zinc-900 dark:border-white bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 scale-125 shadow-lg"
-                                : isReg
-                                    ? "border-green-500 bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-400 hover:scale-110"
-                                    : "border-zinc-400 dark:border-zinc-500 bg-white dark:bg-zinc-700 text-zinc-400 hover:border-zinc-700 dark:hover:border-zinc-300 hover:scale-110"
+                            ${
+                                isSelected
+                                    ? "border-zinc-900 dark:border-white bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 scale-125 shadow-lg"
+                                    : isReg
+                                      ? "border-green-500 bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-400 hover:scale-110"
+                                      : "border-zinc-400 dark:border-zinc-500 bg-white dark:bg-zinc-700 text-zinc-400 hover:border-zinc-700 dark:hover:border-zinc-300 hover:scale-110"
                             }`}
                         title={FINGER_FULL[globalIdx]}
                     >
@@ -273,12 +531,14 @@ function ScannerArea({ state, bitmap, quality, onScan }) {
     return (
         <div className="flex flex-col items-center gap-3">
             {/* Scanner window */}
-            <div className={`relative w-32 h-40 rounded-xl border-2 overflow-hidden flex items-center justify-center transition-all duration-300
-                ${state === "scanning"
-                    ? "border-blue-400 dark:border-blue-500 bg-blue-50 dark:bg-blue-950/30"
-                    : state === "success"
-                        ? "border-green-400 dark:border-green-500 bg-green-50 dark:bg-green-950/30"
-                        : state === "error"
+            <div
+                className={`relative w-32 h-40 rounded-xl border-2 overflow-hidden flex items-center justify-center transition-all duration-300
+                ${
+                    state === "scanning"
+                        ? "border-blue-400 dark:border-blue-500 bg-blue-50 dark:bg-blue-950/30"
+                        : state === "success"
+                          ? "border-green-400 dark:border-green-500 bg-green-50 dark:bg-green-950/30"
+                          : state === "error"
                             ? "border-red-400 dark:border-red-500 bg-red-50 dark:bg-red-950/30"
                             : "border-dashed border-zinc-300 dark:border-zinc-600 bg-zinc-50 dark:bg-zinc-800/50"
                 }`}
@@ -288,7 +548,9 @@ function ScannerArea({ state, bitmap, quality, onScan }) {
                     <div className="absolute inset-0 overflow-hidden">
                         <div
                             className="absolute left-0 right-0 h-0.5 bg-blue-400 dark:bg-blue-400 shadow-[0_0_8px_2px_rgba(96,165,250,0.6)]"
-                            style={{ animation: "scanline 1.4s ease-in-out infinite" }}
+                            style={{
+                                animation: "scanline 1.4s ease-in-out infinite",
+                            }}
                         />
                     </div>
                 )}
@@ -303,31 +565,44 @@ function ScannerArea({ state, bitmap, quality, onScan }) {
                 ) : (
                     <FingerprintIcon
                         className={`w-14 h-14 transition-all duration-300
-                            ${state === "scanning" ? "text-blue-300 dark:text-blue-600 animate-pulse"
-                            : state === "success"  ? "text-green-400 dark:text-green-500"
-                            : state === "error"    ? "text-red-300 dark:text-red-600"
-                            : "text-zinc-300 dark:text-zinc-600"}`}
+                            ${
+                                state === "scanning"
+                                    ? "text-blue-300 dark:text-blue-600 animate-pulse"
+                                    : state === "success"
+                                      ? "text-green-400 dark:text-green-500"
+                                      : state === "error"
+                                        ? "text-red-300 dark:text-red-600"
+                                        : "text-zinc-300 dark:text-zinc-600"
+                            }`}
                     />
                 )}
             </div>
 
             {/* Status text */}
-            <p className={`text-[10px] font-medium text-center leading-tight
-                ${state === "scanning" ? "text-blue-600 dark:text-blue-400"
-                : state === "success"  ? "text-green-600 dark:text-green-400"
-                : state === "error"    ? "text-red-600 dark:text-red-400"
-                : "text-zinc-400 dark:text-zinc-500"}`}
+            <p
+                className={`text-[10px] font-medium text-center leading-tight
+                ${
+                    state === "scanning"
+                        ? "text-blue-600 dark:text-blue-400"
+                        : state === "success"
+                          ? "text-green-600 dark:text-green-400"
+                          : state === "error"
+                            ? "text-red-600 dark:text-red-400"
+                            : "text-zinc-400 dark:text-zinc-500"
+                }`}
             >
-                {state === "idle"     && "Place finger on scanner"}
+                {state === "idle" && "Place finger on scanner"}
                 {state === "scanning" && "Scanning… hold still"}
-                {state === "success"  && "Capture successful"}
-                {state === "error"    && "Scan failed — try again"}
+                {state === "success" && "Capture successful"}
+                {state === "error" && "Scan failed — try again"}
             </p>
 
             {/* Quality bar */}
             {state === "success" && quality > 0 && (
                 <div className="w-full">
-                    <p className="text-[9px] text-zinc-500 dark:text-zinc-400 mb-1">Quality</p>
+                    <p className="text-[9px] text-zinc-500 dark:text-zinc-400 mb-1">
+                        Quality
+                    </p>
                     <QualityBar quality={quality} />
                 </div>
             )}
@@ -337,12 +612,17 @@ function ScannerArea({ state, bitmap, quality, onScan }) {
                 onClick={onScan}
                 disabled={state === "scanning"}
                 className={`mt-1 px-4 py-1.5 rounded-lg text-[11px] font-semibold transition-all duration-200
-                    ${state === "scanning"
-                        ? "bg-zinc-200 dark:bg-zinc-700 text-zinc-400 cursor-not-allowed"
-                        : "bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 hover:opacity-80 active:scale-95"
+                    ${
+                        state === "scanning"
+                            ? "bg-zinc-200 dark:bg-zinc-700 text-zinc-400 cursor-not-allowed"
+                            : "bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 hover:opacity-80 active:scale-95"
                     }`}
             >
-                {state === "scanning" ? "Scanning…" : state === "success" ? "Rescan" : "Start Scan"}
+                {state === "scanning"
+                    ? "Scanning…"
+                    : state === "success"
+                      ? "Rescan"
+                      : "Start Scan"}
             </button>
         </div>
     );
@@ -351,7 +631,15 @@ function ScannerArea({ state, bitmap, quality, onScan }) {
 // ── FingerprintIcon SVG ───────────────────────────────────────────────────────
 function FingerprintIcon({ className }) {
     return (
-        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+        <svg
+            className={className}
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.4"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+        >
             <path d="M12 2C6.477 2 2 6.477 2 12" />
             <path d="M12 6c3.314 0 6 2.686 6 6" />
             <path d="M12 10a2 2 0 0 1 2 2c0 3-3 6-3 6" />
@@ -365,45 +653,56 @@ function FingerprintIcon({ className }) {
 
 // ── Registration Modal ────────────────────────────────────────────────────────
 
-function RegistrationModal({ employee, existingRegistrations, appName, capture, deviceStatus, onClose, onSaved }) {
-    const [selectedFinger, setSelectedFinger]   = useState(null);
-    const [scanState,       setScanState]        = useState("idle");   // idle | scanning | success | error
-    const [capturedData,    setCapturedData]     = useState(null);
-    const [saving,          setSaving]           = useState(false);
-    const [errorMsg,        setErrorMsg]         = useState("");
-    const [localRegs,       setLocalRegs]        = useState(existingRegistrations ?? []);
-    const [detailMap,       setDetailMap]        = useState({});
-    const [loadingDetails,  setLoadingDetails]   = useState(true);
+function RegistrationModal({
+    employee,
+    existingRegistrations,
+    appName,
+    capture,
+    deviceStatus,
+    onClose,
+    onSaved,
+}) {
+    const [selectedFinger, setSelectedFinger] = useState(null);
+    const [scanState, setScanState] = useState("idle"); // idle | scanning | success | error
+    const [capturedData, setCapturedData] = useState(null);
+    const [saving, setSaving] = useState(false);
+    const [errorMsg, setErrorMsg] = useState("");
+    const [localRegs, setLocalRegs] = useState(existingRegistrations ?? []);
+    const [detailMap, setDetailMap] = useState({});
+    const [loadingDetails, setLoadingDetails] = useState(true);
 
     // Load per-finger detail (quality, created_at) from server
     useEffect(() => {
         setLoadingDetails(true);
-        axios.get(`/${appName}/register-fingerprint/${employee.EMPLOYID}/registrations`)
-            .then(res => setDetailMap(res.data))
+        axios
+            .get(
+                `/${appName}/register-fingerprint/${employee.EMPLOYID}/registrations`,
+            )
+            .then((res) => setDetailMap(res.data))
             .catch(() => {})
             .finally(() => setLoadingDetails(false));
     }, [employee.EMPLOYID]);
 
-    const registeredIndices = localRegs.map(r => r.finger_index);
+    const registeredIndices = localRegs.map((r) => r.finger_index);
 
     const handleScan = useCallback(async () => {
-            if (selectedFinger === null) {
-                setErrorMsg("Please select a finger first.");
-                return;
-            }
-            setErrorMsg("");
-            setScanState("scanning");
-            setCapturedData(null);
+        if (selectedFinger === null) {
+            setErrorMsg("Please select a finger first.");
+            return;
+        }
+        setErrorMsg("");
+        setScanState("scanning");
+        setCapturedData(null);
 
-            try {
-                const result = await capture();
-                setCapturedData(result);
-                setScanState("success");
-            } catch (err) {
-                setScanState("error");
-                setErrorMsg(err.message ?? "Unknown scanner error.");
-            }
-        }, [selectedFinger, capture]);
+        try {
+            const result = await capture();
+            setCapturedData(result);
+            setScanState("success");
+        } catch (err) {
+            setScanState("error");
+            setErrorMsg(err.message ?? "Unknown scanner error.");
+        }
+    }, [selectedFinger, capture]);
 
     const handleSave = useCallback(async () => {
         if (!capturedData || scanState !== "success") return;
@@ -412,53 +711,93 @@ function RegistrationModal({ employee, existingRegistrations, appName, capture, 
 
         try {
             const res = await axios.post(`/${appName}/register-fingerprint`, {
-                employid:      employee.EMPLOYID,
+                employid: employee.EMPLOYID,
                 template_data: capturedData.template,
-                device_type:   capturedData.device,
-                finger_index:  selectedFinger,
-                quality:       capturedData.quality,
+                device_type: capturedData.device,
+                finger_index: selectedFinger,
+                quality: capturedData.quality,
             });
 
             if (res.data.success) {
-                const newReg = { finger_index: selectedFinger, quality: capturedData.quality, device_type: capturedData.device };
-                setLocalRegs(prev => {
-                    const filtered = prev.filter(r => r.finger_index !== selectedFinger);
+                const newReg = {
+                    finger_index: selectedFinger,
+                    quality: capturedData.quality,
+                    device_type: capturedData.device,
+                };
+                setLocalRegs((prev) => {
+                    const filtered = prev.filter(
+                        (r) => r.finger_index !== selectedFinger,
+                    );
                     return [...filtered, newReg];
                 });
-                setDetailMap(prev => ({
+                setDetailMap((prev) => ({
                     ...prev,
                     [selectedFinger]: {
                         finger_index: selectedFinger,
-                        quality:      capturedData.quality,
-                        device_type:  capturedData.device,
-                        created_at:   "Just now",
+                        quality: capturedData.quality,
+                        device_type: capturedData.device,
+                        created_at: "Just now",
                     },
                 }));
                 setScanState("idle");
                 setCapturedData(null);
-                onSaved(employee.EMPLOYID, [...localRegs.filter(r => r.finger_index !== selectedFinger), newReg]);
+                onSaved(employee.EMPLOYID, [
+                    ...localRegs.filter(
+                        (r) => r.finger_index !== selectedFinger,
+                    ),
+                    newReg,
+                ]);
             }
         } catch (err) {
-            setErrorMsg(err.response?.data?.message ?? "Failed to save.");
+            const data = err.response?.data;
+            // Show full Laravel validation errors if present
+            const validationErrors = data?.errors
+                ? Object.values(data.errors).flat().join(" | ")
+                : null;
+            setErrorMsg(validationErrors ?? data?.message ?? "Failed to save.");
+            console.error("[Save] Response data:", data);
         } finally {
             setSaving(false);
         }
-    }, [capturedData, scanState, selectedFinger, employee.EMPLOYID, appName, localRegs, onSaved]);
+    }, [
+        capturedData,
+        scanState,
+        selectedFinger,
+        employee.EMPLOYID,
+        appName,
+        localRegs,
+        onSaved,
+    ]);
 
-    const handleDelete = useCallback(async (fingerIndex) => {
-        if (!confirm(`Remove fingerprint for ${FINGER_FULL[fingerIndex]}?`)) return;
+    const handleDelete = useCallback(
+        async (fingerIndex) => {
+            if (!confirm(`Remove fingerprint for ${FINGER_FULL[fingerIndex]}?`))
+                return;
 
-        try {
-            await axios.delete(`/${appName}/register-fingerprint/${employee.EMPLOYID}/${fingerIndex}`);
-            const updated = localRegs.filter(r => r.finger_index !== fingerIndex);
-            setLocalRegs(updated);
-            setDetailMap(prev => { const n = { ...prev }; delete n[fingerIndex]; return n; });
-            onSaved(employee.EMPLOYID, updated);
-            if (selectedFinger === fingerIndex) { setScanState("idle"); setCapturedData(null); }
-        } catch {
-            setErrorMsg("Failed to remove fingerprint.");
-        }
-    }, [localRegs, selectedFinger, employee.EMPLOYID, appName, onSaved]);
+            try {
+                await axios.delete(
+                    `/${appName}/register-fingerprint/${employee.EMPLOYID}/${fingerIndex}`,
+                );
+                const updated = localRegs.filter(
+                    (r) => r.finger_index !== fingerIndex,
+                );
+                setLocalRegs(updated);
+                setDetailMap((prev) => {
+                    const n = { ...prev };
+                    delete n[fingerIndex];
+                    return n;
+                });
+                onSaved(employee.EMPLOYID, updated);
+                if (selectedFinger === fingerIndex) {
+                    setScanState("idle");
+                    setCapturedData(null);
+                }
+            } catch {
+                setErrorMsg("Failed to remove fingerprint.");
+            }
+        },
+        [localRegs, selectedFinger, employee.EMPLOYID, appName, onSaved],
+    );
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -470,15 +809,18 @@ function RegistrationModal({ employee, existingRegistrations, appName, capture, 
 
             {/* Panel */}
             <div className="relative z-10 w-full max-w-2xl bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl border border-zinc-200 dark:border-zinc-700 overflow-hidden flex flex-col max-h-[90vh]">
-
                 {/* Header */}
                 <div className="flex items-center gap-3 px-5 py-4 border-b border-zinc-100 dark:border-zinc-800 flex-shrink-0">
                     <div className="w-9 h-9 rounded-lg bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center flex-shrink-0">
                         <FingerprintIcon className="w-5 h-5 text-zinc-500 dark:text-zinc-400" />
                     </div>
                     <div className="flex-1 min-w-0">
-                        <p className="text-sm font-semibold text-zinc-800 dark:text-zinc-100 truncate">{employee.EMPNAME}</p>
-                        <p className="text-[10px] text-zinc-400 dark:text-zinc-500">{employee.EMPLOYID} · {employee.DEPARTMENT}</p>
+                        <p className="text-sm font-semibold text-zinc-800 dark:text-zinc-100 truncate">
+                            {employee.EMPNAME}
+                        </p>
+                        <p className="text-[10px] text-zinc-400 dark:text-zinc-500">
+                            {employee.EMPLOYID} · {employee.DEPARTMENT}
+                        </p>
                     </div>
                     <div className="flex items-center gap-2">
                         <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400">
@@ -496,14 +838,17 @@ function RegistrationModal({ employee, existingRegistrations, appName, capture, 
                 {/* Body */}
                 <div className="flex-1 overflow-auto p-5">
                     <div className="grid grid-cols-2 gap-5">
-
                         {/* LEFT: Hand diagrams + finger list */}
                         <div className="flex flex-col gap-4">
-                            <p className="text-[10px] font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest">Select Finger</p>
+                            <p className="text-[10px] font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest">
+                                Select Finger
+                            </p>
 
                             {/* Right hand */}
                             <div>
-                                <p className="text-[9px] text-zinc-400 dark:text-zinc-500 mb-1 uppercase tracking-wider">Right Hand</p>
+                                <p className="text-[9px] text-zinc-400 dark:text-zinc-500 mb-1 uppercase tracking-wider">
+                                    Right Hand
+                                </p>
                                 <HandDiagram
                                     hand="right"
                                     registeredIndices={registeredIndices}
@@ -519,7 +864,9 @@ function RegistrationModal({ employee, existingRegistrations, appName, capture, 
 
                             {/* Left hand */}
                             <div>
-                                <p className="text-[9px] text-zinc-400 dark:text-zinc-500 mb-1 uppercase tracking-wider">Left Hand</p>
+                                <p className="text-[9px] text-zinc-400 dark:text-zinc-500 mb-1 uppercase tracking-wider">
+                                    Left Hand
+                                </p>
                                 <HandDiagram
                                     hand="left"
                                     registeredIndices={registeredIndices}
@@ -538,24 +885,35 @@ function RegistrationModal({ employee, existingRegistrations, appName, capture, 
                                 {selectedFinger !== null ? (
                                     <p className="text-xs font-medium text-zinc-700 dark:text-zinc-200">
                                         {FINGER_FULL[selectedFinger]}
-                                        {registeredIndices.includes(selectedFinger) && (
-                                            <span className="ml-2 text-[9px] font-semibold text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/30 px-1.5 py-0.5 rounded">Registered</span>
+                                        {registeredIndices.includes(
+                                            selectedFinger,
+                                        ) && (
+                                            <span className="ml-2 text-[9px] font-semibold text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/30 px-1.5 py-0.5 rounded">
+                                                Registered
+                                            </span>
                                         )}
                                     </p>
                                 ) : (
-                                    <p className="text-[10px] text-zinc-400 dark:text-zinc-500">Click a finger to select</p>
+                                    <p className="text-[10px] text-zinc-400 dark:text-zinc-500">
+                                        Click a finger to select
+                                    </p>
                                 )}
                             </div>
                         </div>
 
                         {/* RIGHT: Scanner + registered list */}
                         <div className="flex flex-col gap-4">
-
                             {/* Scanner area */}
                             <div>
-                                <p className="text-[10px] font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest mb-3">Scanner</p>
+                                <p className="text-[10px] font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest mb-3">
+                                    Scanner
+                                </p>
                                 <ScannerArea
-                                    state={selectedFinger !== null ? scanState : "idle"}
+                                    state={
+                                        selectedFinger !== null
+                                            ? scanState
+                                            : "idle"
+                                    }
                                     bitmap={capturedData?.bitmap}
                                     quality={capturedData?.quality ?? 0}
                                     onScan={handleScan}
@@ -582,38 +940,66 @@ function RegistrationModal({ employee, existingRegistrations, appName, capture, 
 
                             {/* Registered fingers list */}
                             <div>
-                                <p className="text-[10px] font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest mb-2">Registered Fingers</p>
+                                <p className="text-[10px] font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest mb-2">
+                                    Registered Fingers
+                                </p>
                                 {loadingDetails ? (
-                                    <p className="text-[10px] text-zinc-400 italic">Loading…</p>
+                                    <p className="text-[10px] text-zinc-400 italic">
+                                        Loading…
+                                    </p>
                                 ) : registeredIndices.length === 0 ? (
-                                    <p className="text-[10px] text-zinc-400 dark:text-zinc-500 italic">No fingerprints registered yet.</p>
+                                    <p className="text-[10px] text-zinc-400 dark:text-zinc-500 italic">
+                                        No fingerprints registered yet.
+                                    </p>
                                 ) : (
                                     <div className="flex flex-col gap-1 max-h-40 overflow-auto">
-                                        {registeredIndices.sort((a,b)=>a-b).map(fi => {
-                                            const detail = detailMap[fi];
-                                            return (
-                                                <div key={fi} className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-zinc-50 dark:bg-zinc-800 border border-zinc-100 dark:border-zinc-700 group">
-                                                    <div className="flex items-center gap-2 min-w-0">
-                                                        <span className="w-4 h-4 rounded-full bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400 text-[8px] flex items-center justify-center font-bold flex-shrink-0">✓</span>
-                                                        <div className="min-w-0">
-                                                            <p className="text-[10px] font-medium text-zinc-700 dark:text-zinc-200 truncate">{FINGER_FULL[fi]}</p>
-                                                            {detail && (
-                                                                <p className="text-[8px] text-zinc-400 dark:text-zinc-500">
-                                                                    Q:{detail.quality}% · {detail.created_at}
-                                                                </p>
-                                                            )}
-                                                        </div>
-                                                    </div>
-                                                    <button
-                                                        onClick={() => handleDelete(fi)}
-                                                        className="text-[9px] text-red-400 hover:text-red-600 dark:hover:text-red-300 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 px-1"
-                                                        title="Remove"
+                                        {registeredIndices
+                                            .sort((a, b) => a - b)
+                                            .map((fi) => {
+                                                const detail = detailMap[fi];
+                                                return (
+                                                    <div
+                                                        key={fi}
+                                                        className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-zinc-50 dark:bg-zinc-800 border border-zinc-100 dark:border-zinc-700 group"
                                                     >
-                                                        ✕
-                                                    </button>
-                                                </div>
-                                            );
-                                        })}
+                                                        <div className="flex items-center gap-2 min-w-0">
+                                                            <span className="w-4 h-4 rounded-full bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400 text-[8px] flex items-center justify-center font-bold flex-shrink-0">
+                                                                ✓
+                                                            </span>
+                                                            <div className="min-w-0">
+                                                                <p className="text-[10px] font-medium text-zinc-700 dark:text-zinc-200 truncate">
+                                                                    {
+                                                                        FINGER_FULL[
+                                                                            fi
+                                                                        ]
+                                                                    }
+                                                                </p>
+                                                                {detail && (
+                                                                    <p className="text-[8px] text-zinc-400 dark:text-zinc-500">
+                                                                        Q:
+                                                                        {
+                                                                            detail.quality
+                                                                        }
+                                                                        % ·{" "}
+                                                                        {
+                                                                            detail.created_at
+                                                                        }
+                                                                    </p>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                        <button
+                                                            onClick={() =>
+                                                                handleDelete(fi)
+                                                            }
+                                                            className="text-[9px] text-red-400 hover:text-red-600 dark:hover:text-red-300 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 px-1"
+                                                            title="Remove"
+                                                        >
+                                                            ✕
+                                                        </button>
+                                                    </div>
+                                                );
+                                            })}
                                     </div>
                                 )}
                             </div>
@@ -629,11 +1015,12 @@ function RegistrationModal({ employee, existingRegistrations, appName, capture, 
 
 function EmployeeCard({ employee, registrations = [], onClick }) {
     const regCount = registrations.length;
-    const statusColor = regCount === 0
-        ? "bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 border-red-200 dark:border-red-800"
-        : regCount < 5
-            ? "bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400 border-amber-200 dark:border-amber-800"
-            : "bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400 border-green-200 dark:border-green-800";
+    const statusColor =
+        regCount === 0
+            ? "bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 border-red-200 dark:border-red-800"
+            : regCount < 5
+              ? "bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400 border-amber-200 dark:border-amber-800"
+              : "bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400 border-green-200 dark:border-green-800";
 
     return (
         <button
@@ -646,30 +1033,38 @@ function EmployeeCard({ employee, registrations = [], onClick }) {
                     <p className="text-[11px] font-semibold text-zinc-800 dark:text-zinc-100 truncate leading-tight">
                         {employee.EMPNAME}
                     </p>
-                    <p className="text-[9px] text-zinc-400 dark:text-zinc-500 mt-0.5">{employee.EMPLOYID}</p>
+                    <p className="text-[9px] text-zinc-400 dark:text-zinc-500 mt-0.5">
+                        {employee.EMPLOYID}
+                    </p>
                 </div>
-                <span className={`flex-shrink-0 text-[8px] font-bold px-1.5 py-0.5 rounded-full border ${statusColor}`}>
+                <span
+                    className={`flex-shrink-0 text-[8px] font-bold px-1.5 py-0.5 rounded-full border ${statusColor}`}
+                >
                     {regCount}/10
                 </span>
             </div>
 
             {/* Department / job */}
             <p className="text-[9px] text-zinc-500 dark:text-zinc-400 truncate mb-3">
-                {employee.DEPARTMENT}{employee.JOB_TITLE ? ` · ${employee.JOB_TITLE}` : ""}
+                {employee.DEPARTMENT}
+                {employee.JOB_TITLE ? ` · ${employee.JOB_TITLE}` : ""}
             </p>
 
             {/* Finger dots */}
             <div className="flex gap-0.5 flex-wrap">
                 {Array.from({ length: 10 }).map((_, i) => {
-                    const isReg = registrations.some(r => r.finger_index === i);
+                    const isReg = registrations.some(
+                        (r) => r.finger_index === i,
+                    );
                     return (
                         <span
                             key={i}
                             title={FINGER_FULL[i]}
                             className={`w-3.5 h-3.5 rounded-full transition-colors
-                                ${isReg
-                                    ? "bg-green-400 dark:bg-green-500"
-                                    : "bg-zinc-200 dark:bg-zinc-700"
+                                ${
+                                    isReg
+                                        ? "bg-green-400 dark:bg-green-500"
+                                        : "bg-zinc-200 dark:bg-zinc-700"
                                 }`}
                         />
                     );
@@ -686,36 +1081,55 @@ function EmployeeCard({ employee, registrations = [], onClick }) {
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
-export default function RegisterFingerprint({ employees = [], registrations = {} }) {
+export default function RegisterFingerprint({
+    employees = [],
+    registrations = {},
+}) {
     const { app_name } = usePage().props;
-    const { capture, deviceStatus } = useDigitalPersona();
 
-    const [search,      setSearch]      = useState("");
-    const [deptFilter,  setDeptFilter]  = useState("");
-    const [statusFilter,setStatusFilter]= useState(""); // all | registered | partial | none
-    const [modalEmp,    setModalEmp]    = useState(null);
-    const [regMap,      setRegMap]      = useState(registrations);
+    const [scannerType, setScannerType] = useState("digitalpersona");
+    const dp = useDigitalPersona();
+    const secugen = useSecuGen();
+    const { capture, deviceStatus } = scannerType === "secugen" ? secugen : dp;
 
-    const departments = [...new Set(employees.map(e => e.DEPARTMENT).filter(Boolean))].sort();
+    const [search, setSearch] = useState("");
+    const [deptFilter, setDeptFilter] = useState("");
+    const [statusFilter, setStatusFilter] = useState(""); // all | registered | partial | none
+    const [modalEmp, setModalEmp] = useState(null);
+    const [regMap, setRegMap] = useState(registrations);
 
-    const filtered = employees.filter(emp => {
-        const q  = search.toLowerCase();
-        const ok = !q || emp.EMPNAME.toLowerCase().includes(q) || emp.EMPLOYID.toLowerCase().includes(q);
+    const departments = [
+        ...new Set(employees.map((e) => e.DEPARTMENT).filter(Boolean)),
+    ].sort();
+
+    const filtered = employees.filter((emp) => {
+        const q = search.toLowerCase();
+        const ok =
+            !q ||
+            emp.EMPNAME.toLowerCase().includes(q) ||
+            emp.EMPLOYID.toLowerCase().includes(q);
         const dOk = !deptFilter || emp.DEPARTMENT === deptFilter;
         const regs = (regMap[emp.EMPLOYID] ?? []).length;
-        const sOk  = !statusFilter
-            || (statusFilter === "registered" && regs === 10)
-            || (statusFilter === "partial"    && regs > 0 && regs < 10)
-            || (statusFilter === "none"       && regs === 0);
+        const sOk =
+            !statusFilter ||
+            (statusFilter === "registered" && regs === 10) ||
+            (statusFilter === "partial" && regs > 0 && regs < 10) ||
+            (statusFilter === "none" && regs === 0);
         return ok && dOk && sOk;
     });
 
     const handleSaved = useCallback((employId, updatedRegs) => {
-        setRegMap(prev => ({ ...prev, [employId]: updatedRegs }));
+        setRegMap((prev) => ({ ...prev, [employId]: updatedRegs }));
     }, []);
 
-    const totalRegs  = employees.reduce((s, e) => s + ((regMap[e.EMPLOYID] ?? []).length > 0 ? 1 : 0), 0);
-    const totalNone  = employees.reduce((s, e) => s + ((regMap[e.EMPLOYID] ?? []).length === 0 ? 1 : 0), 0);
+    const totalRegs = employees.reduce(
+        (s, e) => s + ((regMap[e.EMPLOYID] ?? []).length > 0 ? 1 : 0),
+        0,
+    );
+    const totalNone = employees.reduce(
+        (s, e) => s + ((regMap[e.EMPLOYID] ?? []).length === 0 ? 1 : 0),
+        0,
+    );
 
     return (
         <AuthenticatedLayout>
@@ -731,43 +1145,86 @@ export default function RegisterFingerprint({ employees = [], registrations = {}
             `}</style>
 
             <div className="h-full flex flex-col overflow-hidden">
-
                 {/* Page header */}
                 <div className="px-5 py-4 border-b border-zinc-100 dark:border-zinc-800 flex items-center justify-between gap-4 flex-shrink-0">
                     <div>
-                        <h1 className="text-sm font-semibold text-zinc-800 dark:text-zinc-100">Fingerprint Registration</h1>
+                        <h1 className="text-sm font-semibold text-zinc-800 dark:text-zinc-100">
+                            Fingerprint Registration
+                        </h1>
                         <p className="text-[10px] text-zinc-400 dark:text-zinc-500 mt-0.5">
-                            {totalRegs} of {employees.length} employees have at least one finger registered · {totalNone} unregistered
+                            {totalRegs} of {employees.length} employees have at
+                            least one finger registered · {totalNone}{" "}
+                            unregistered
                         </p>
                     </div>
 
                     {/* Filters */}
                     <div className="flex items-center gap-2 overflow-x-auto flex-nowrap min-w-0">
+                        {/* Scanner toggle */}
+                        <div className="flex items-center gap-0.5 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 p-0.5 flex-shrink-0">
+                            <button
+                                onClick={() => setScannerType("digitalpersona")}
+                                className={`px-2.5 py-1 rounded-md text-[9px] font-semibold transition-all
+                                    ${
+                                        scannerType === "digitalpersona"
+                                            ? "bg-white dark:bg-zinc-700 text-zinc-800 dark:text-zinc-100 shadow-sm"
+                                            : "text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300"
+                                    }`}
+                            >
+                                HID DigitalPersona
+                            </button>
+                            <button
+                                onClick={() => setScannerType("secugen")}
+                                className={`px-2.5 py-1 rounded-md text-[9px] font-semibold transition-all
+                                    ${
+                                        scannerType === "secugen"
+                                            ? "bg-white dark:bg-zinc-700 text-zinc-800 dark:text-zinc-100 shadow-sm"
+                                            : "text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300"
+                                    }`}
+                            >
+                                SecuGen
+                            </button>
+                        </div>
 
                         {/* Device status badge */}
-                        <span className={`flex-shrink-0 text-[9px] font-semibold px-2 py-1 rounded-full border
-                            ${deviceStatus === "ready"
-                                ? "bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400 border-green-200 dark:border-green-800"
-                                : deviceStatus === "sdk_missing"
-                                    ? "bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 border-red-200 dark:border-red-800"
-                                    : "bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400 border-amber-200 dark:border-amber-800"
+                        <span
+                            className={`flex-shrink-0 text-[9px] font-semibold px-2 py-1 rounded-full border
+                            ${
+                                deviceStatus === "ready"
+                                    ? "bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400 border-green-200 dark:border-green-800"
+                                    : deviceStatus === "sdk_missing"
+                                      ? "bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 border-red-200 dark:border-red-800"
+                                      : "bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400 border-amber-200 dark:border-amber-800"
                             }`}
                         >
-                            {deviceStatus === "ready"        && "🟢 Scanner Ready"}
-                            {deviceStatus === "connecting"   && "🟡 Waiting for device…"}
-                            {deviceStatus === "disconnected" && "🔴 Device disconnected"}
-                            {deviceStatus === "sdk_missing"  && "⚠ SDK not loaded"}
+                            {deviceStatus === "ready" && "🟢 Scanner Ready"}
+                            {deviceStatus === "connecting" &&
+                                "🟡 Waiting for device…"}
+                            {deviceStatus === "disconnected" &&
+                                "🔴 Device disconnected"}
+                            {deviceStatus === "sdk_missing" &&
+                                "⚠ SDK not loaded"}
                         </span>
                         {/* Search */}
                         <div className="relative flex-shrink-0">
-                            <svg className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-zinc-400 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
+                            <svg
+                                className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-zinc-400 pointer-events-none"
+                                fill="none"
+                                viewBox="0 0 24 24"
+                                stroke="currentColor"
+                                strokeWidth={2}
+                            >
+                                <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z"
+                                />
                             </svg>
                             <input
                                 type="text"
                                 placeholder="Search employee…"
                                 value={search}
-                                onChange={e => setSearch(e.target.value)}
+                                onChange={(e) => setSearch(e.target.value)}
                                 className="text-[10px] rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 pl-6 pr-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-zinc-400 w-40"
                             />
                         </div>
@@ -775,22 +1232,30 @@ export default function RegisterFingerprint({ employees = [], registrations = {}
                         {/* Department */}
                         <select
                             value={deptFilter}
-                            onChange={e => setDeptFilter(e.target.value)}
+                            onChange={(e) => setDeptFilter(e.target.value)}
                             className="flex-shrink-0 text-[10px] rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-zinc-400"
                         >
                             <option value="">All Departments</option>
-                            {departments.map(d => <option key={d} value={d}>{d}</option>)}
+                            {departments.map((d) => (
+                                <option key={d} value={d}>
+                                    {d}
+                                </option>
+                            ))}
                         </select>
 
                         {/* Status */}
                         <select
                             value={statusFilter}
-                            onChange={e => setStatusFilter(e.target.value)}
+                            onChange={(e) => setStatusFilter(e.target.value)}
                             className="flex-shrink-0 text-[10px] rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-zinc-400"
                         >
                             <option value="">All Status</option>
-                            <option value="registered">Fully Registered (10/10)</option>
-                            <option value="partial">Partially Registered</option>
+                            <option value="registered">
+                                Fully Registered (10/10)
+                            </option>
+                            <option value="partial">
+                                Partially Registered
+                            </option>
                             <option value="none">Not Registered</option>
                         </select>
                     </div>
@@ -799,7 +1264,8 @@ export default function RegisterFingerprint({ employees = [], registrations = {}
                 {/* Results count */}
                 <div className="px-5 py-2 border-b border-zinc-100 dark:border-zinc-800 flex-shrink-0">
                     <p className="text-[9px] text-zinc-400 dark:text-zinc-500">
-                        Showing {filtered.length} of {employees.length} employees
+                        Showing {filtered.length} of {employees.length}{" "}
+                        employees
                     </p>
                 </div>
 
@@ -812,9 +1278,12 @@ export default function RegisterFingerprint({ employees = [], registrations = {}
                     ) : (
                         <div
                             className="grid gap-3"
-                            style={{ gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))" }}
+                            style={{
+                                gridTemplateColumns:
+                                    "repeat(auto-fill, minmax(190px, 1fr))",
+                            }}
                         >
-                            {filtered.map(emp => (
+                            {filtered.map((emp) => (
                                 <EmployeeCard
                                     key={emp.EMPLOYID}
                                     employee={emp}

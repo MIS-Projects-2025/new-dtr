@@ -201,7 +201,18 @@ class FingerprintService
         throw new \RuntimeException('Could not launch fingerprint worker.');
     }
 
-    fwrite($pipes[0], json_encode($payload));
+    $json   = json_encode($payload);
+    $length = strlen($json);
+    $offset = 0;
+
+    while ($offset < $length) {
+        $chunk   = substr($json, $offset, 8192);
+        $written = fwrite($pipes[0], $chunk);
+        if ($written === false) {
+            break;
+        }
+        $offset += $written;
+    }
     fclose($pipes[0]);
 
     $stdout = stream_get_contents($pipes[1]);
@@ -225,8 +236,10 @@ class FingerprintService
 
 public function extractFmd(string $base64Png): string
 {
-    // Normalize URL-safe base64 → standard base64
-    $base64Png = strtr($base64Png, '-_', '+/');
+    // Normalize URL-safe base64 → standard base64 and strip whitespace
+    $base64Png = strtr(trim($base64Png), '-_', '+/');
+    // Pad to multiple of 4
+    $base64Png = str_pad($base64Png, strlen($base64Png) + (4 - strlen($base64Png) % 4) % 4, '=');
 
     $result = $this->callWorker([
         'action' => 'extract',
@@ -236,13 +249,26 @@ public function extractFmd(string $base64Png): string
     return $result['fmd'];
 }
 
+public function extractFmdFromIso(string $base64IsoTemplate): string
+{
+    // SecuGen ISO template — worker converts it directly, no PNG needed
+    $result = $this->callWorker([
+        'action'   => 'extract_iso',
+        'template' => $base64IsoTemplate,
+    ]);
+    return $result['fmd'];
+}
+
 public function matchFmd(string $probePng, array $candidates): array
 {
     // Normalize URL-safe base64 → standard base64
     $probePng = strtr($probePng, '-_', '+/');
 
+    $isSecuGen = isset($candidates[0]['device_type']) &&
+                 str_contains(strtolower($candidates[0]['device_type'] ?? ''), 'secugen');
+
     $result = $this->callWorker([
-        'action'     => 'match',
+        'action'     => $isSecuGen ? 'match_iso' : 'match',
         'probe'      => $probePng,
         'candidates' => $candidates,
         'dpi'        => config('fingerprint.dpi'),
@@ -250,4 +276,13 @@ public function matchFmd(string $probePng, array $candidates): array
     return $result['scores'];
 }
 
+public function matchWithFmd(string $probeFmd, array $candidates): array
+    {
+        $result = $this->callWorker([
+            'action'     => 'match_fmd',
+            'probe_fmd'  => $probeFmd,
+            'candidates' => $candidates,
+        ]);
+        return $result['scores'];
+    }
 }

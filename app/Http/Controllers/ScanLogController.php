@@ -12,9 +12,8 @@ use Carbon\Carbon;
 class ScanLogController extends Controller
 {
     // ── Tune these after checking laravel.log ─────────────────────────────────
-    private const MATCH_THRESHOLD    = 40;   // minimum score to count as a candidate
-    private const REJECTION_GAP      = 10;    // best score must beat 2nd place by this much
-    private const SIZE               = 96;   // comparison grid size
+    private const MATCH_THRESHOLD = 100;  // SourceAFIS scores are typically 100-500+ for real matches
+    private const REJECTION_GAP   = 50;   // best must clearly beat 2nd place from a different employee
 
     private const FINGER_LABELS = [
         'Right Thumb',  'Right Index',  'Right Middle', 'Right Ring',  'Right Little',
@@ -57,22 +56,27 @@ public function verifyAndLog(Request $request)
         'fmd'          => $t->fmd_data,
     ])->values()->toArray();
 
-    // ── Call C# SourceAFIS worker ─────────────────────────────────────────────
+    // ── Extract FMD from probe image first, then match ────────────────────────
     $fingerprintService = app(\App\Services\FingerprintService::class);
     try {
-        $scores = $fingerprintService->matchFmd(
-            $validated['template_data'],
-            $candidates
-        );
+        $cleanImage = strtr(trim($validated['template_data']), '-_', '+/');
+        $cleanImage = str_pad($cleanImage, strlen($cleanImage) + (4 - strlen($cleanImage) % 4) % 4, '=');
+        $probeFmd   = $fingerprintService->extractFmd($cleanImage);
+        $scores     = $fingerprintService->matchWithFmd($probeFmd, $candidates);
     } catch (\Throwable $e) {
         \Log::error('[ScanLog] SourceAFIS match error: ' . $e->getMessage());
         return response()->json([
             'matched' => false,
-            'message' => 'Matching engine error. Please try again.',
+            'message' => 'Matching engine error: ' . $e->getMessage(),
         ], 500);
     }
 
-    \Log::info('[ScanLog] All scores:', array_slice($scores, 0, 10));
+    $top10 = array_slice($scores, 0, 10);
+    \Log::info('[ScanLog] Top 10 scores:', array_map(fn($s) => [
+        'employid'     => $s['employid'],
+        'finger_index' => $s['finger_index'],
+        'score'        => $s['score'],
+    ], $top10));
 
     if (empty($scores)) {
         return response()->json(['matched' => false, 'message' => 'Comparison failed.']);
@@ -91,16 +95,20 @@ public function verifyAndLog(Request $request)
         ]);
     }
 
-    // ── Reject if gap between 1st and 2nd is too small ───────────────────────
-    if ($secondBest && $secondBest['employid'] !== $best['employid']) {
-        $gap = $best['score'] - $secondBest['score'];
-        if ($gap < self::REJECTION_GAP) {
-            \Log::info("[ScanLog] Rejected — gap too small: best={$best['score']} second={$secondBest['score']} gap={$gap}");
-            return response()->json([
-                'matched' => false,
-                'message' => 'Ambiguous scan — please try again.',
-                'score'   => round($best['score'], 4),
-            ]);
+    // ── Reject if another employee's score is too close to the best ───────────
+    $bestEmpId = $best['employid'];
+    foreach (array_slice($scores, 1) as $other) {
+        if ($other['employid'] !== $bestEmpId) {
+            $gap = $best['score'] - $other['score'];
+            \Log::info("[ScanLog] Gap check: best={$best['score']} other={$other['score']} gap={$gap} other_emp={$other['employid']}");
+            if ($gap < self::REJECTION_GAP) {
+                return response()->json([
+                    'matched' => false,
+                    'message' => 'Ambiguous scan — please try again.',
+                    'score'   => round($best['score'], 4),
+                ]);
+            }
+            break; // only check the closest competing employee
         }
     }
 
