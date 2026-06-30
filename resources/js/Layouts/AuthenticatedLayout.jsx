@@ -1,5 +1,5 @@
 import NavBar from "@/Components/NavBar";
-import Sidebar from "@/Components/sidebar/SideBar";
+import Sidebar from "@/Components/Sidebar/Sidebar";
 import LoadingScreen from "@/Components/LoadingScreen";
 import { usePage } from "@inertiajs/react";
 
@@ -21,7 +21,7 @@ export default function AuthenticatedLayout({ children }) {
                 {/* ── Footer ── */}
                 <footer className="px-6 py-1.5 border-t border-zinc-200 dark:border-zinc-800 flex items-center justify-end">
                     <span className="text-[9px] text-zinc-400 dark:text-zinc-600">
-                        Developed by: AJ | whatsapp📞: 09563649802 
+                        Developed by: AJ | whatsapp📞: 09563649802
                         <span className="font-semibold text-zinc-500 dark:text-zinc-500"></span>
                     </span>
                 </footer>
@@ -29,4 +29,3 @@ export default function AuthenticatedLayout({ children }) {
         </div>
     );
 }
-

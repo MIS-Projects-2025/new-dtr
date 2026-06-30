@@ -1,13 +1,13 @@
 import { usePage } from "@inertiajs/react";
-import SidebarLink from "@/Components/sidebar/SidebarLink";
-import { 
-  LayoutDashboard, 
-  CalendarDays, 
-  Users, 
-  Fingerprint,
-  Clock,
-  Award,
-  BarChart3
+import SidebarLink from "@/Components/Sidebar/SidebarLink";
+import {
+    LayoutDashboard,
+    CalendarDays,
+    Users,
+    Fingerprint,
+    Clock,
+    Award,
+    BarChart3,
 } from "lucide-react";
 
 export default function NavLinks({ isSidebarOpen }) {
@@ -65,7 +65,11 @@ export default function NavLinks({ isSidebarOpen }) {
             )}
 
             {/* Position 2, 3, 4, 5 or HR */}
-            {(isHR || isPosition2 || isPosition3 || isPosition4 || isPosition5) && (
+            {(isHR ||
+                isPosition2 ||
+                isPosition3 ||
+                isPosition4 ||
+                isPosition5) && (
                 <SidebarLink
                     href={route("attendance.summary")}
                     icon={<BarChart3 size={20} />}
@@ -75,7 +79,11 @@ export default function NavLinks({ isSidebarOpen }) {
             )}
 
             {/* Position 2, 3, 4, 5 or HR */}
-            {(isHR || isPosition2 || isPosition3 || isPosition4 || isPosition5) && (
+            {(isHR ||
+                isPosition2 ||
+                isPosition3 ||
+                isPosition4 ||
+                isPosition5) && (
                 <SidebarLink
                     href={route("perfect-attendance.index")}
                     icon={<Award size={20} />}
