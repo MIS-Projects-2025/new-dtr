@@ -121,7 +121,7 @@ export default function NavBar() {
 
                                 <ChevronDown className="w-3.5 h-3.5 text-muted-foreground transition-transform duration-200 group-data-[state=open]:rotate-180" />
                             </Button>
-                        </DropDownMenuTrigger>
+                        </DropdownMenuTrigger>
 
                         <DropdownMenuContent
                             align="end"
@@ -163,7 +163,7 @@ export default function NavBar() {
                                     <User className="w-4 h-4 text-muted-foreground" />
                                     <span className="text-sm">Profile</span>
                                 </a>
-                            </DropDownMenuItem>
+                            </DropdownMenuItem>
 
                             <DropdownMenuItem
                                 onClick={logout}
@@ -178,9 +178,9 @@ export default function NavBar() {
                                 <span className="text-sm">
                                     {isLoggingOut ? "Signing out…" : "Log out"}
                                 </span>
-                            </DropDownMenuItem>
-                        </DropDownMenuContent>
-                    </DropDownMenu>
+                            </DropdownMenuItem>
+                        </DropdownMenuContent>
+                    </DropdownMenu>
                 </div>
             </div>
         </nav>
