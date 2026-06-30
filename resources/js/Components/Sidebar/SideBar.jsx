@@ -1,6 +1,6 @@
 import { Link, usePage, router } from "@inertiajs/react";
 import { useState, useEffect } from "react";
-import Navigation from "@/Components/Sidebar/Navigation";
+import Navigation from "@/Components/sidebar/Navigation";
 import { cn } from "@/lib/utils";
 import { Button } from "@/Components/ui/button";
 import { Separator } from "@/Components/ui/separator";
