@@ -1,5 +1,5 @@
 import NavBar from "@/Components/NavBar";
-import Sidebar from "@/Components/Sidebar/Sidebar";
+import Sidebar from "@/Components/Sidebar/SideBar";
 import LoadingScreen from "@/Components/LoadingScreen";
 import { usePage } from "@inertiajs/react";
 
