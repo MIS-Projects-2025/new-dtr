@@ -1,6 +1,6 @@
 import { Link, usePage, router } from "@inertiajs/react";
 import { useState, useEffect } from "react";
-import Navigation from "@/Components/sidebar/Navigation";
+import Navigation from "@/Components/Sidebar/Navigation";
 import { cn } from "@/lib/utils";
 import { Button } from "@/Components/ui/button";
 import { Separator } from "@/Components/ui/separator";
@@ -163,7 +163,7 @@ export default function Sidebar() {
                             )}
                         >
                             <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 bg-primary shadow-md">
-                                <CalendarClock  className="w-4 h-4 text-primary-foreground" />
+                                <CalendarClock className="w-4 h-4 text-primary-foreground" />
                             </div>
 
                             {isSidebarOpen && (
