@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import AuthenticatedLayout from "@/Layouts/AuthenticatedLayout";
 import { Head, usePage } from "@inertiajs/react";
 import axios from "axios";
+import { useDigitalPersona, useSecuGen } from "@/hooks/useFingerprint";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -29,228 +30,6 @@ const LOG_COLOR_SELECTED = {
     orange: "border-orange-500 bg-orange-500 text-white",
     red: "border-red-500    bg-red-500    text-white",
 };
-
-// ── DigitalPersona hook (same as RegisterFingerprint) ─────────────────────────
-
-function useDigitalPersona() {
-    const clientRef = useRef(null);
-    const deviceRef = useRef(null);
-    const [deviceStatus, setDeviceStatus] = useState("connecting");
-
-    useEffect(() => {
-        let cancelled = false;
-        let pollTimer = null;
-
-        const tryInit = () => {
-            if (cancelled) return;
-            const sdk = window.Fingerprint ?? window.DigitalPersona ?? null;
-            if (!sdk?.WebApi) {
-                pollTimer = setTimeout(tryInit, 300);
-                return;
-            }
-
-            let client;
-            try {
-                client = new sdk.WebApi();
-            } catch {
-                setDeviceStatus("sdk_missing");
-                return;
-            }
-            clientRef.current = client;
-
-            client.onDeviceConnected = (e) => {
-                deviceRef.current =
-                    e?.deviceUid ?? e?.deviceID ?? e?.uid ?? "auto";
-                setDeviceStatus("ready");
-            };
-            client.onDeviceDisconnected = () => {
-                deviceRef.current = null;
-                setDeviceStatus("disconnected");
-            };
-            client.onCommunicationFailed = (e) => {
-                console.warn("[DP] Communication failed:", e);
-                setDeviceStatus("disconnected");
-            };
-
-            // One-time probe after 2s — only if onDeviceConnected hasn't fired yet
-            setTimeout(() => {
-                if (deviceRef.current !== null || cancelled) return;
-                const SampleFormat =
-                    sdk.SampleFormat ?? sdk.Formats?.SampleFormat;
-                client
-                    .startAcquisition(SampleFormat.PngImage)
-                    .then(() => {
-                        deviceRef.current = "auto";
-                        setDeviceStatus("ready");
-                        return client.stopAcquisition();
-                    })
-                    .catch(() => {
-                        if (!cancelled) setDeviceStatus("disconnected");
-                    });
-            }, 2000);
-        };
-
-        if (document.readyState === "complete") tryInit();
-        else window.addEventListener("load", tryInit, { once: true });
-
-        return () => {
-            cancelled = true;
-            clearTimeout(pollTimer);
-            try {
-                clientRef.current?.stopAcquisition();
-            } catch {}
-        };
-    }, []);
-
-    const capture = useCallback(
-        () =>
-            new Promise((resolve, reject) => {
-                const sdk = window.Fingerprint ?? window.DigitalPersona ?? null;
-                const client = clientRef.current;
-                if (!sdk || !client)
-                    return reject(new Error("Scanner not ready."));
-
-                let qualityScore = 80;
-                let settled = false;
-
-                const settle = (fn) => {
-                    if (settled) return;
-                    settled = true;
-                    clearTimeout(timeoutHandle);
-                    client.stopAcquisition().catch(() => {});
-                    fn();
-                };
-
-                const timeoutHandle = setTimeout(() => {
-                    settle(() =>
-                        reject(
-                            new Error(
-                                "Scan timed out — no finger detected within 20 seconds.",
-                            ),
-                        ),
-                    );
-                }, 20000);
-
-                client.onQualityReported = (e) => {
-                    qualityScore =
-                        e.quality === 0
-                            ? 90
-                            : Math.max(10, 80 - e.quality * 10);
-                };
-                client.onSamplesAcquired = (e) => {
-                    try {
-                        const samples = JSON.parse(e.samples);
-                        let base64Data = samples[0]?.Data ?? samples[0];
-                        base64Data = base64Data
-                            .replace(/-/g, "+")
-                            .replace(/_/g, "/");
-                        settle(() =>
-                            resolve({
-                                template: base64Data,
-                                quality: qualityScore,
-                                bitmap: base64Data,
-                                device: "DigitalPersona U.are.U 4500",
-                            }),
-                        );
-                    } catch (err) {
-                        settle(() =>
-                            reject(
-                                new Error(
-                                    "Failed to parse fingerprint sample: " +
-                                        err.message,
-                                ),
-                            ),
-                        );
-                    }
-                };
-                client.onErrorOccurred = (e) => {
-                    settle(() =>
-                        reject(
-                            new Error(
-                                `Scanner error: ${e?.error ?? JSON.stringify(e)}`,
-                            ),
-                        ),
-                    );
-                };
-
-                const SampleFormat =
-                    sdk.SampleFormat ?? sdk.Formats?.SampleFormat;
-                client
-                    .stopAcquisition()
-                    .catch(() => {})
-                    .finally(() => {
-                        client
-                            .startAcquisition(SampleFormat.PngImage)
-                            .catch((err) => {
-                                settle(() =>
-                                    reject(
-                                        new Error(
-                                            err?.message ??
-                                                "Failed to start acquisition.",
-                                        ),
-                                    ),
-                                );
-                            });
-                    });
-            }),
-        [],
-    );
-
-    return { capture, deviceStatus };
-}
-
-// ── SecuGen Hook ──────────────────────────────────────────────────────────────
-
-function useSecuGen() {
-    const [deviceStatus, setDeviceStatus] = useState("connecting");
-
-    useEffect(() => {
-        fetch("http://localhost:8000/SGIFPCapture?Timeout=1000&Quality=50", {
-            mode: "cors",
-        })
-            .then(() => setDeviceStatus("ready"))
-            .catch(() => setDeviceStatus("disconnected"));
-    }, []);
-
-    const capture = useCallback(
-        () =>
-            new Promise((resolve, reject) => {
-                fetch(
-                    "http://localhost:8000/SGIFPCapture?Timeout=15000&Quality=50&TemplateFormat=ISO&ImageWSQRate=0",
-                    { mode: "cors" },
-                )
-                    .then((r) => r.json())
-                    .then((data) => {
-                        if (data.ErrorCode !== 0)
-                            return reject(
-                                new Error(`SecuGen error ${data.ErrorCode}`),
-                            );
-                        const imageData =
-                            data.BMPBase64 ?? data.ImageDataBase64;
-                        if (!imageData)
-                            return reject(
-                                new Error("SecuGen returned no image data."),
-                            );
-                        resolve({
-                            template: imageData,
-                            quality: data.ImageQuality ?? 80,
-                            bitmap: data.BMPBase64,
-                            device: `SecuGen ${data.Model ?? ""}`.trim(),
-                        });
-                    })
-                    .catch(() =>
-                        reject(
-                            new Error(
-                                "SecuGen service not reachable. Is SgiBioSrv running?",
-                            ),
-                        ),
-                    );
-            }),
-        [],
-    );
-
-    return { capture, deviceStatus };
-}
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
@@ -438,7 +217,8 @@ export default function ScanLog() {
     const [scannerType, setScannerType] = useState("digitalpersona");
     const dp = useDigitalPersona();
     const secugen = useSecuGen();
-    const { capture, deviceStatus } = scannerType === "secugen" ? secugen : dp;
+    const { capture, deviceStatus, refreshStatus } =
+        scannerType === "secugen" ? secugen : dp;
 
     const [selectedLogType, setSelectedLogType] = useState("check_in");
     const [scanState, setScanState] = useState("idle"); // idle | scanning | verifying | done
@@ -565,6 +345,15 @@ export default function ScanLog() {
                             </button>
                         </div>
                         <DeviceBadge status={deviceStatus} />
+                        {scannerType === "secugen" && (
+                            <button
+                                onClick={() => refreshStatus?.()}
+                                className="text-[10px] text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors px-1"
+                                title="Re-check SecuGen connection"
+                            >
+                                ↻
+                            </button>
+                        )}
                         <span className="text-lg font-bold tabular-nums text-zinc-700 dark:text-zinc-200">
                             {clock.toLocaleTimeString([], {
                                 hour: "2-digit",

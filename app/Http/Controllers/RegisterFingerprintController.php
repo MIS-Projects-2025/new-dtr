@@ -145,4 +145,10 @@ class RegisterFingerprintController extends Controller
 
             return response()->json($templates);
         }
+
+    public function deviceStatus(): \Illuminate\Http\JsonResponse
+    {
+        $status = app(\App\Services\FingerprintService::class)->checkSecuGenStatus();
+        return response()->json($status);
+    }
 }

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import AuthenticatedLayout from "@/Layouts/AuthenticatedLayout";
 import { Head, usePage } from "@inertiajs/react";
 import axios from "axios";
+import { useDigitalPersona, useSecuGen } from "@/hooks/useFingerprint";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -54,11 +55,9 @@ const LEFT_POSITIONS = [
 //         SecuGen        → http://localhost:9734
 //         DigitalPersona → http://localhost:4649
 
-// ── DigitalPersona U.are.U 4500 Hook ─────────────────────────────────────────
-// Requires SDK scripts loaded in app.blade.php (from lib/ folder in the repo).
-// DigitalPersona Lite Client must be installed: https://crossmatch.hid.gl/lite-client/
+// ── SecuGen Hook ──────────────────────────────────────────────────────────────
 
-function useDigitalPersona() {
+function useSecuGen() {
     const clientRef = useRef(null);
     const deviceRef = useRef(null);
     const [deviceStatus, setDeviceStatus] = useState("connecting");
@@ -290,31 +289,61 @@ function useDigitalPersona() {
 function useSecuGen() {
     const [deviceStatus, setDeviceStatus] = useState("connecting");
 
-    useEffect(() => {
-        fetch("http://localhost:8000/SGIFPCapture?Timeout=1000&Quality=50", {
+    const checkStatus = useCallback(() => {
+        setDeviceStatus((s) => (s === "ready" ? s : "connecting"));
+        return fetch("https://localhost:8443/SGIFPCapture", {
+            method: "POST",
             mode: "cors",
+            headers: {
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            body: "Timeout=1000&Quality=50&licstr=&templateFormat=ISO&imageWSQRate=0.75",
         })
-            .then(() => setDeviceStatus("ready"))
+            .then((r) => r.json())
+            .then((data) => {
+                if (data.ErrorCode !== 0) throw new Error("not ready");
+                setDeviceStatus("ready");
+            })
             .catch(() => setDeviceStatus("disconnected"));
     }, []);
+
+    useEffect(() => {
+        let cancelled = false;
+        let timer = null;
+
+        const poll = () => {
+            if (cancelled) return;
+            checkStatus().finally(() => {
+                if (!cancelled) timer = setTimeout(poll, 3000);
+            });
+        };
+
+        poll();
+
+        return () => {
+            cancelled = true;
+            clearTimeout(timer);
+        };
+    }, [checkStatus]);
 
     const capture = useCallback(
         () =>
             new Promise((resolve, reject) => {
-                fetch(
-                    "http://localhost:8000/SGIFPCapture?Timeout=15000&Quality=50&TemplateFormat=ISO&ImageWSQRate=0",
-                    { mode: "cors" },
-                )
+                fetch("https://localhost:8443/SGIFPCapture", {
+                    method: "POST",
+                    mode: "cors",
+                    headers: {
+                        "Content-Type": "application/x-www-form-urlencoded",
+                    },
+                    body: "Timeout=10000&Quality=50&licstr=&templateFormat=ISO&imageWSQRate=0.75",
+                })
                     .then((r) => r.json())
                     .then((data) => {
                         if (data.ErrorCode !== 0)
                             return reject(
                                 new Error(`SecuGen error ${data.ErrorCode}`),
                             );
-                        // Use BMPBase64 (raw image) so SourceAFIS can extract FMD the same
-                        // way it does for DigitalPersona — no ISO parsing needed
-                        const imageData =
-                            data.BMPBase64 ?? data.ImageDataBase64;
+                        const imageData = data.BMPBase64;
                         if (!imageData)
                             return reject(
                                 new Error("SecuGen returned no image data."),
@@ -329,7 +358,7 @@ function useSecuGen() {
                     .catch(() =>
                         reject(
                             new Error(
-                                "SecuGen service not reachable. Is SgiBioSrv running?",
+                                "SecuGen WebAPI agent not reachable on https://localhost:8443.",
                             ),
                         ),
                     );
@@ -337,7 +366,7 @@ function useSecuGen() {
         [],
     );
 
-    return { capture, deviceStatus };
+    return { capture, deviceStatus, refreshStatus: checkStatus };
 }
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -1090,7 +1119,8 @@ export default function RegisterFingerprint({
     const [scannerType, setScannerType] = useState("digitalpersona");
     const dp = useDigitalPersona();
     const secugen = useSecuGen();
-    const { capture, deviceStatus } = scannerType === "secugen" ? secugen : dp;
+    const { capture, deviceStatus, refreshStatus } =
+        scannerType === "secugen" ? secugen : dp;
 
     const [search, setSearch] = useState("");
     const [deptFilter, setDeptFilter] = useState("");
@@ -1205,6 +1235,15 @@ export default function RegisterFingerprint({
                             {deviceStatus === "sdk_missing" &&
                                 "⚠ SDK not loaded"}
                         </span>
+                        {scannerType === "secugen" && (
+                            <button
+                                onClick={() => refreshStatus?.()}
+                                className="flex-shrink-0 text-[10px] text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors px-1"
+                                title="Re-check SecuGen connection"
+                            >
+                                ↻
+                            </button>
+                        )}
                         {/* Search */}
                         <div className="relative flex-shrink-0">
                             <svg
