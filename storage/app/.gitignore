@@ -6,5 +6,6 @@
 !.gitignore
 !exports/
 !exports/**
-!fingerprint/
-!fingerprint/**
+!app/
+!app/fingerprint/
+!app/fingerprint/**
