@@ -1,8 +1,10 @@
 *
 !private/
+!private/**
 !public/
+!public/**
 !.gitignore
 !exports/
+!exports/**
 !fingerprint/
-!fingerprint/FpWorker/
-!fingerprint/FpWorker/**
+!fingerprint/**
