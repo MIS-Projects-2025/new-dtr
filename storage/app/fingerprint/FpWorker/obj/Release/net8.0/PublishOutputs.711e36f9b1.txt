@@ -1,0 +1,9 @@
+/var/www/new-dtr/storage/app/fingerprint/FpWorker/bin/Release/net8.0/publish/FpWorker
+/var/www/new-dtr/storage/app/fingerprint/FpWorker/bin/Release/net8.0/publish/FpWorker.dll
+/var/www/new-dtr/storage/app/fingerprint/FpWorker/bin/Release/net8.0/publish/FpWorker.deps.json
+/var/www/new-dtr/storage/app/fingerprint/FpWorker/bin/Release/net8.0/publish/FpWorker.runtimeconfig.json
+/var/www/new-dtr/storage/app/fingerprint/FpWorker/bin/Release/net8.0/publish/FpWorker.pdb
+/var/www/new-dtr/storage/app/fingerprint/FpWorker/bin/Release/net8.0/publish/Dahomey.Cbor.dll
+/var/www/new-dtr/storage/app/fingerprint/FpWorker/bin/Release/net8.0/publish/SixLabors.ImageSharp.dll
+/var/www/new-dtr/storage/app/fingerprint/FpWorker/bin/Release/net8.0/publish/SourceAFIS.dll
+/var/www/new-dtr/storage/app/fingerprint/FpWorker/bin/Release/net8.0/publish/System.IO.Pipelines.dll

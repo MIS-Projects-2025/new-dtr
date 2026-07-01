@@ -1,0 +1,94 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v8.0",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v8.0": {
+      "FpWorker/1.0.0": {
+        "dependencies": {
+          "SixLabors.ImageSharp": "3.1.6",
+          "SourceAFIS": "3.14.0"
+        },
+        "runtime": {
+          "FpWorker.dll": {}
+        }
+      },
+      "Dahomey.Cbor/1.16.1": {
+        "dependencies": {
+          "System.IO.Pipelines": "6.0.1"
+        },
+        "runtime": {
+          "lib/net6.0/Dahomey.Cbor.dll": {
+            "assemblyVersion": "1.16.1.0",
+            "fileVersion": "1.16.1.0"
+          }
+        }
+      },
+      "SixLabors.ImageSharp/3.1.6": {
+        "runtime": {
+          "lib/net6.0/SixLabors.ImageSharp.dll": {
+            "assemblyVersion": "3.0.0.0",
+            "fileVersion": "3.1.6.0"
+          }
+        }
+      },
+      "SourceAFIS/3.14.0": {
+        "dependencies": {
+          "Dahomey.Cbor": "1.16.1",
+          "SixLabors.ImageSharp": "3.1.6"
+        },
+        "runtime": {
+          "lib/net5.0/SourceAFIS.dll": {
+            "assemblyVersion": "3.14.0.0",
+            "fileVersion": "3.14.0.0"
+          }
+        }
+      },
+      "System.IO.Pipelines/6.0.1": {
+        "runtime": {
+          "lib/net6.0/System.IO.Pipelines.dll": {
+            "assemblyVersion": "6.0.0.0",
+            "fileVersion": "6.0.121.56705"
+          }
+        }
+      }
+    }
+  },
+  "libraries": {
+    "FpWorker/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Dahomey.Cbor/1.16.1": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-NeFvt9CXi5Ew6ZnpjQsO4RoKfZiSZH3Ap7PCdqHryr/RL5WrrPl1+JbXny8ynNEmb6/1wDfT1F5I9fbPN6H84w==",
+      "path": "dahomey.cbor/1.16.1",
+      "hashPath": "dahomey.cbor.1.16.1.nupkg.sha512"
+    },
+    "SixLabors.ImageSharp/3.1.6": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-dHQ5jugF9v+5/LCVHCWVzaaIL6WOehqJy6eju/0VFYFPEj2WtqkGPoEV9EVQP83dHsdoqYaTuWpZdwAd37UwfA==",
+      "path": "sixlabors.imagesharp/3.1.6",
+      "hashPath": "sixlabors.imagesharp.3.1.6.nupkg.sha512"
+    },
+    "SourceAFIS/3.14.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-TLTICwNMqBROeEAa4JNeY5eW3PyBawg6hrSqqEZ/45RtM0+e6oVHIzL4AYipF1SC2BlKh+ofhgxnuaDmPqMzuA==",
+      "path": "sourceafis/3.14.0",
+      "hashPath": "sourceafis.3.14.0.nupkg.sha512"
+    },
+    "System.IO.Pipelines/6.0.1": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-1j1pZX1ICzEyjafyssU3BzWVxUsaN3zq0wEmGKj3bxINC6NkmS30eEVuZ7k/QX2UKYNCaUch6g46taYKxcpFtw==",
+      "path": "system.io.pipelines/6.0.1",
+      "hashPath": "system.io.pipelines.6.0.1.nupkg.sha512"
+    }
+  }
+}

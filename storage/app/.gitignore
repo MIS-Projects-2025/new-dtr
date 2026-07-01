@@ -2,7 +2,7 @@
 !private/
 !public/
 !.gitignore
+!exports/
 !fingerprint/
 !fingerprint/FpWorker/
-!fingerprint/FpWorker/FpWorker.csproj
-!fingerprint/FpWorker/Program.cs
+!fingerprint/FpWorker/**

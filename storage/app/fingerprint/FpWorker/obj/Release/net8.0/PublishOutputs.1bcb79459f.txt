@@ -1,0 +1,9 @@
+C:\xampp\htdocs\new-dtr\storage\app\fingerprint\FpWorker\bin\Release\net8.0\publish\FpWorker.exe
+C:\xampp\htdocs\new-dtr\storage\app\fingerprint\FpWorker\bin\Release\net8.0\publish\FpWorker.dll
+C:\xampp\htdocs\new-dtr\storage\app\fingerprint\FpWorker\bin\Release\net8.0\publish\FpWorker.deps.json
+C:\xampp\htdocs\new-dtr\storage\app\fingerprint\FpWorker\bin\Release\net8.0\publish\FpWorker.runtimeconfig.json
+C:\xampp\htdocs\new-dtr\storage\app\fingerprint\FpWorker\bin\Release\net8.0\publish\FpWorker.pdb
+C:\xampp\htdocs\new-dtr\storage\app\fingerprint\FpWorker\bin\Release\net8.0\publish\Dahomey.Cbor.dll
+C:\xampp\htdocs\new-dtr\storage\app\fingerprint\FpWorker\bin\Release\net8.0\publish\SixLabors.ImageSharp.dll
+C:\xampp\htdocs\new-dtr\storage\app\fingerprint\FpWorker\bin\Release\net8.0\publish\SourceAFIS.dll
+C:\xampp\htdocs\new-dtr\storage\app\fingerprint\FpWorker\bin\Release\net8.0\publish\System.IO.Pipelines.dll
