@@ -13,7 +13,7 @@ COPY opcache.ini /usr/local/etc/php/conf.d/opcache.ini
 WORKDIR /var/www
 COPY . .
 
-RUN chmod +x /var/www/storage/app/fingerprint/FpWorker/bin/Release/net8.0/linux-x64/publish/FpWorker
+RUN chmod +x /var/www/storage/app/fingerprint/FpWorker/publish/FpWorker
 
 RUN composer install --no-dev --optimize-autoloader
 RUN npm ci && npm run build && rm -rf node_modules

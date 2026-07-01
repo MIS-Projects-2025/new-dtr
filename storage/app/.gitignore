@@ -7,5 +7,5 @@
 !exports/
 !exports/**
 !app/
-!app/fingerprint/
-!app/fingerprint/**
+!fingerprint/
+!fingerprint/**
