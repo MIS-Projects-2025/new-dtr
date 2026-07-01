@@ -35,4 +35,7 @@ return [
         ],
     ],
 
+    'authify' => [
+        'url' => env('AUTHIFY_URL', 'http://localhost:8200'),
+    ],
 ];

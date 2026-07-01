@@ -87,7 +87,7 @@ class AuthMiddleware
             session()->forget('emp_data');
             session()->flush();
             $redirectUrl = urlencode(route('dashboard'));
-            $authifyUrl  = "http://192.168.2.221:8200/logout?redirect={$redirectUrl}";
+            $authifyUrl  = config('services.authify.url') . "/logout?redirect={$redirectUrl}";
 
             return Inertia::render('Unauthorized', [
                 'logoutUrl' => $authifyUrl,
@@ -175,6 +175,7 @@ class AuthMiddleware
     private function redirectToLogin(Request $request)
     {
         $redirectUrl = urlencode($request->fullUrl());
-        return Inertia::location("http://192.168.2.221:8200/login?redirect={$redirectUrl}");
+        $authifyUrl = config('services.authify.url') . "/login?redirect={$redirectUrl}";
+        return Inertia::location($authifyUrl);
     }
 }
