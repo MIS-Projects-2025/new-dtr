@@ -171,4 +171,11 @@ public function verifyAndLog(Request $request)
         ],
     ]);
 }
+
+public function guestIndex()
+{
+    return Inertia::render('ScanLogGuest', [
+        'app_name' => env('APP_NAME', ''),
+    ]);
+}
 }

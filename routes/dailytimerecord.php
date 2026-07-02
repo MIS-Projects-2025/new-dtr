@@ -7,7 +7,6 @@ use App\Http\Controllers\DailyTimeRecordController;
 use App\Http\Controllers\BiometricStatusController;
 
 $app_name = env('APP_NAME', '');
-Route::redirect('/', "/$app_name");
 
 Route::prefix($app_name)->middleware(AuthMiddleware::class)->group(function () {
   

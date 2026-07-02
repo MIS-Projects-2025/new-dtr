@@ -6,7 +6,6 @@ use App\Http\Controllers\PerfectAttendanceController;
 
 
 $app_name = env('APP_NAME', '');
-Route::redirect('/', "/$app_name");
 
 Route::prefix($app_name)->middleware(AuthMiddleware::class)->group(function () {
   
