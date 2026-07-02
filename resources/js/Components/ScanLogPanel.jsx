@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Head, usePage } from "@inertiajs/react";
 import axios from "axios";
 import { useDigitalPersona, useSecuGen } from "@/hooks/useFingerprint";
+import { Dialog, DialogContent } from "@/Components/ui/dialog";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -486,65 +487,60 @@ export default function ScanLogPanel() {
                 {/* ── Center: scan interaction panel ─────────────────────── */}
                 <div className="flex-1 flex flex-col min-w-0">
                     <div className="flex-1 flex flex-col items-center justify-center gap-8 px-8 py-8 min-h-0 overflow-auto">
-                        {scanState === "done" && result ? (
-                            <ResultCard result={result} onReset={handleReset} />
-                        ) : (
-                            <>
-                                {/* Headline + stage dots, mirrors "Hi X, enter your PIN" header */}
-                                <div className="w-full max-w-lg flex flex-col items-center gap-3 text-center">
-                                    <h1 className="text-2xl font-bold text-zinc-800 dark:text-zinc-100">
-                                        {stageHeadline}
-                                    </h1>
-                                    <p className="text-base text-zinc-500 dark:text-zinc-400">
-                                        We'll record this as your{" "}
-                                        <span className="font-semibold">
-                                            {selectedLog?.label}
-                                        </span>
-                                        .
-                                    </p>
-                                    <StageDots scanState={scanState} />
-                                </div>
+                        <>
+                            {/* Headline + stage dots, mirrors "Hi X, enter your PIN" header */}
+                            <div className="w-full max-w-lg flex flex-col items-center gap-3 text-center">
+                                <h1 className="text-2xl font-bold text-zinc-800 dark:text-zinc-100">
+                                    {stageHeadline}
+                                </h1>
+                                <p className="text-base text-zinc-500 dark:text-zinc-400">
+                                    We'll record this as your{" "}
+                                    <span className="font-semibold">
+                                        {selectedLog?.label}
+                                    </span>
+                                    .
+                                </p>
+                                <StageDots scanState={scanState} />
+                            </div>
 
-                                {/* Log type selector — large touch targets */}
-                                <div className="w-full max-w-2xl rounded-3xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-sm p-6">
-                                    <p className="text-center text-sm font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest mb-4">
-                                        Select Log Type
-                                    </p>
-                                    <div className="grid grid-cols-4 gap-3">
-                                        {LOG_TYPES.map((lt) => {
-                                            const isSelected =
-                                                selectedLogType === lt.key;
-                                            return (
-                                                <button
-                                                    key={lt.key}
-                                                    onClick={() => {
-                                                        setSelectedLogType(
-                                                            lt.key,
-                                                        );
-                                                        handleReset();
-                                                    }}
-                                                    className={`px-3 py-4 rounded-2xl border-2 text-sm font-semibold transition-all duration-150 active:scale-95
+                            {/* Log type selector — large touch targets */}
+                            <div className="w-full max-w-2xl rounded-3xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-sm p-6">
+                                <p className="text-center text-sm font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest mb-4">
+                                    Select Log Type
+                                </p>
+                                <div className="grid grid-cols-4 gap-3">
+                                    {LOG_TYPES.map((lt) => {
+                                        const isSelected =
+                                            selectedLogType === lt.key;
+                                        return (
+                                            <button
+                                                key={lt.key}
+                                                onClick={() => {
+                                                    setSelectedLogType(lt.key);
+                                                    handleReset();
+                                                }}
+                                                className={`px-3 py-4 rounded-2xl border-2 text-sm font-semibold transition-all duration-150 active:scale-95
                                                         ${
                                                             isSelected
                                                                 ? `${LOG_COLOR_SELECTED[lt.color]} shadow-md`
                                                                 : `${LOG_COLOR[lt.color]} hover:shadow-sm`
                                                         }`}
-                                                >
-                                                    {lt.label}
-                                                </button>
-                                            );
-                                        })}
-                                    </div>
+                                            >
+                                                {lt.label}
+                                            </button>
+                                        );
+                                    })}
                                 </div>
+                            </div>
 
-                                {/* Scan stage — big, centered, unmissable */}
-                                <div className="w-full max-w-lg rounded-3xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-sm p-5 sm:p-8 flex flex-col items-center gap-5 sm:gap-6">
-                                    <div
-                                        style={{
-                                            width: "clamp(160px, 26vh, 224px)",
-                                            height: "clamp(180px, 30vh, 256px)",
-                                        }}
-                                        className={`relative rounded-3xl border-4 overflow-hidden flex items-center justify-center transition-all duration-300
+                            {/* Scan stage — big, centered, unmissable */}
+                            <div className="w-full max-w-lg rounded-3xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-sm p-5 sm:p-8 flex flex-col items-center gap-5 sm:gap-6">
+                                <div
+                                    style={{
+                                        width: "clamp(160px, 26vh, 224px)",
+                                        height: "clamp(180px, 30vh, 256px)",
+                                    }}
+                                    className={`relative rounded-3xl border-4 overflow-hidden flex items-center justify-center transition-all duration-300
                                         ${
                                             scanState === "scanning"
                                                 ? "border-blue-400 dark:border-blue-500 bg-blue-50 dark:bg-blue-950/30"
@@ -552,31 +548,31 @@ export default function ScanLogPanel() {
                                                   ? "border-violet-400 dark:border-violet-500 bg-violet-50 dark:bg-violet-950/30"
                                                   : "border-dashed border-zinc-300 dark:border-zinc-600 bg-zinc-50 dark:bg-zinc-800/50"
                                         }`}
-                                    >
-                                        {scanState === "scanning" && (
-                                            <div className="absolute inset-0 overflow-hidden">
-                                                <div
-                                                    className="absolute left-0 right-0 top-0 h-1 bg-blue-400 shadow-[0_0_12px_3px_rgba(96,165,250,0.6)]"
-                                                    style={{
-                                                        animation:
-                                                            "scanline 1.4s ease-in-out infinite",
-                                                        "--scan-h":
-                                                            "calc(clamp(180px, 30vh, 256px) - 4px)",
-                                                    }}
-                                                />
-                                            </div>
-                                        )}
-                                        {scanState === "verifying" && (
-                                            <div className="absolute inset-0 flex items-center justify-center">
-                                                <div className="w-14 h-14 border-4 border-violet-400 border-t-transparent rounded-full animate-spin" />
-                                            </div>
-                                        )}
-                                        <FingerprintIcon
-                                            style={{
-                                                width: "clamp(64px, 12vh, 112px)",
-                                                height: "clamp(64px, 12vh, 112px)",
-                                            }}
-                                            className={`transition-all duration-300
+                                >
+                                    {scanState === "scanning" && (
+                                        <div className="absolute inset-0 overflow-hidden">
+                                            <div
+                                                className="absolute left-0 right-0 top-0 h-1 bg-blue-400 shadow-[0_0_12px_3px_rgba(96,165,250,0.6)]"
+                                                style={{
+                                                    animation:
+                                                        "scanline 1.4s ease-in-out infinite",
+                                                    "--scan-h":
+                                                        "calc(clamp(180px, 30vh, 256px) - 4px)",
+                                                }}
+                                            />
+                                        </div>
+                                    )}
+                                    {scanState === "verifying" && (
+                                        <div className="absolute inset-0 flex items-center justify-center">
+                                            <div className="w-14 h-14 border-4 border-violet-400 border-t-transparent rounded-full animate-spin" />
+                                        </div>
+                                    )}
+                                    <FingerprintIcon
+                                        style={{
+                                            width: "clamp(64px, 12vh, 112px)",
+                                            height: "clamp(64px, 12vh, 112px)",
+                                        }}
+                                        className={`transition-all duration-300
                                             ${
                                                 scanState === "scanning"
                                                     ? "text-blue-300   dark:text-blue-600 animate-pulse"
@@ -584,92 +580,101 @@ export default function ScanLogPanel() {
                                                       ? "text-violet-200 dark:text-violet-700 opacity-30"
                                                       : "text-zinc-300   dark:text-zinc-600"
                                             }`}
-                                        />
+                                    />
+                                </div>
+
+                                {errorMsg && (
+                                    <div className="w-full text-base text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl px-4 py-3 text-center">
+                                        {errorMsg}
                                     </div>
+                                )}
 
-                                    {errorMsg && (
-                                        <div className="w-full text-base text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl px-4 py-3 text-center">
-                                            {errorMsg}
-                                        </div>
-                                    )}
-
-                                    {/* Scanner picker + device status — sits directly above Start Scan */}
-                                    <div className="w-full flex flex-col items-center gap-2">
-                                        <div className="flex items-center gap-3 flex-wrap justify-center">
-                                            <div className="flex items-center gap-1 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-800 p-1">
-                                                <button
-                                                    onClick={() =>
-                                                        setScannerType(
-                                                            "digitalpersona",
-                                                        )
-                                                    }
-                                                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all
+                                {/* Scanner picker + device status — sits directly above Start Scan */}
+                                <div className="w-full flex flex-col items-center gap-2">
+                                    <div className="flex items-center gap-3 flex-wrap justify-center">
+                                        <div className="flex items-center gap-1 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-800 p-1">
+                                            <button
+                                                onClick={() =>
+                                                    setScannerType(
+                                                        "digitalpersona",
+                                                    )
+                                                }
+                                                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all
                                                         ${
                                                             scannerType ===
                                                             "digitalpersona"
                                                                 ? "bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900"
                                                                 : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200"
                                                         }`}
-                                                >
-                                                    HID DigitalPersona
-                                                </button>
-                                                <button
-                                                    onClick={() =>
-                                                        setScannerType(
-                                                            "secugen",
-                                                        )
-                                                    }
-                                                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all
+                                            >
+                                                HID DigitalPersona
+                                            </button>
+                                            <button
+                                                onClick={() =>
+                                                    setScannerType("secugen")
+                                                }
+                                                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all
                                                         ${
                                                             scannerType ===
                                                             "secugen"
                                                                 ? "bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900"
                                                                 : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200"
                                                         }`}
-                                                >
-                                                    SecuGen
-                                                </button>
-                                            </div>
-                                            <DeviceBadge
-                                                status={deviceStatus}
-                                            />
-                                            {scannerType === "secugen" && (
-                                                <button
-                                                    onClick={() =>
-                                                        refreshStatus?.()
-                                                    }
-                                                    className="text-sm text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 transition-colors px-1"
-                                                    title="Re-check SecuGen connection"
-                                                >
-                                                    ↻
-                                                </button>
-                                            )}
+                                            >
+                                                SecuGen
+                                            </button>
                                         </div>
+                                        <DeviceBadge status={deviceStatus} />
+                                        {scannerType === "secugen" && (
+                                            <button
+                                                onClick={() =>
+                                                    refreshStatus?.()
+                                                }
+                                                className="text-sm text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 transition-colors px-1"
+                                                title="Re-check SecuGen connection"
+                                            >
+                                                ↻
+                                            </button>
+                                        )}
                                     </div>
+                                </div>
 
-                                    <button
-                                        onClick={handleScan}
-                                        disabled={
-                                            scanState !== "idle" ||
-                                            deviceStatus !== "ready"
-                                        }
-                                        className={`w-full px-8 py-4 rounded-2xl text-xl font-bold transition-all duration-200
+                                <button
+                                    onClick={handleScan}
+                                    disabled={
+                                        scanState !== "idle" ||
+                                        deviceStatus !== "ready"
+                                    }
+                                    className={`w-full px-8 py-4 rounded-2xl text-xl font-bold transition-all duration-200
                                             ${
                                                 scanState !== "idle" ||
                                                 deviceStatus !== "ready"
                                                     ? "bg-zinc-200 dark:bg-zinc-700 text-zinc-400 cursor-not-allowed"
                                                     : "bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 shadow-md hover:shadow-lg hover:opacity-90 active:scale-95"
                                             }`}
-                                    >
-                                        {scanState === "scanning"
-                                            ? "Scanning…"
-                                            : scanState === "verifying"
-                                              ? "Verifying…"
-                                              : "Start Scan"}
-                                    </button>
-                                </div>
-                            </>
-                        )}
+                                >
+                                    {scanState === "scanning"
+                                        ? "Scanning…"
+                                        : scanState === "verifying"
+                                          ? "Verifying…"
+                                          : "Start Scan"}
+                                </button>
+                            </div>
+                        </>
+
+                        <Dialog
+                            open={scanState === "done" && !!result}
+                            onOpenChange={(open) => {
+                                if (!open) handleReset();
+                            }}
+                        >
+                            <DialogContent className="sm:max-w-lg p-0 border-none bg-transparent shadow-none">
+                                <ResultCard
+                                    result={result}
+                                    onReset={handleReset}
+                                />
+                            </DialogContent>
+                        </Dialog>
                     </div>
                 </div>
 
