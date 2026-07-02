@@ -1,8 +1,12 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useContext } from "react";
 import { Head, usePage } from "@inertiajs/react";
 import axios from "axios";
 import { useDigitalPersona, useSecuGen } from "@/hooks/useFingerprint";
 import { Dialog, DialogContent } from "@/Components/ui/dialog";
+import { ThemeContext } from "@/Components/ThemeContext";
+import { cn } from "@/lib/utils";
+import { Button } from "@/Components/ui/button";
+import { LogIn, Sun, Moon } from "lucide-react";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -283,6 +287,12 @@ function RecentLogRow({ log }) {
 
 export default function ScanLogPanel() {
     const { app_name } = usePage().props;
+    const { theme, toggleTheme } = useContext(ThemeContext);
+    const isDark = theme === "dark";
+
+    const goToLogin = () => {
+        window.location.href = `/${app_name}`;
+    };
 
     const [scannerType, setScannerType] = useState("digitalpersona");
     const dp = useDigitalPersona();
@@ -397,6 +407,36 @@ export default function ScanLogPanel() {
                             backgroundSize: "24px 24px",
                         }}
                     />
+
+                    {/* ── Theme toggle + staff login, floating top-right corner ── */}
+                    <div className="absolute top-6 right-6 z-20 flex items-center gap-1.5 rounded-full bg-primary-foreground/10 backdrop-blur-md border border-primary-foreground/15 p-1 shadow-sm">
+                        <button
+                            onClick={toggleTheme}
+                            aria-label="Toggle theme"
+                            title={
+                                isDark
+                                    ? "Switch to light mode"
+                                    : "Switch to dark mode"
+                            }
+                            className="w-8 h-8 flex items-center justify-center rounded-full text-primary-foreground/70 hover:text-primary-foreground hover:bg-primary-foreground/10 transition-all duration-200"
+                        >
+                            {isDark ? (
+                                <Sun className="w-4 h-4" />
+                            ) : (
+                                <Moon className="w-4 h-4" />
+                            )}
+                        </button>
+
+                        <div className="w-px h-4 bg-primary-foreground/15" />
+
+                        <button
+                            onClick={goToLogin}
+                            title="Staff Login"
+                            className="w-8 h-8 flex items-center justify-center rounded-full text-primary-foreground/70 hover:text-primary-foreground hover:bg-primary-foreground/10 transition-all duration-200"
+                        >
+                            <LogIn className="w-4 h-4" />
+                        </button>
+                    </div>
 
                     <LiveClock />
 
